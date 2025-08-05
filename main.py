@@ -1,13 +1,10 @@
 import os
 import json
-import glob
-from dotenv import load_dotenv
-from typing import List
-from docx import Document
+import re
 import PyPDF2
 import google.generativeai as genai
-from pydantic import BaseModel
-import re
+from dotenv import load_dotenv
+from docx import Document
 
 # Load Gemini API key from .env
 load_dotenv()
@@ -22,7 +19,7 @@ base_prompt_match = re.search(r'---([\s\S]*?)---', rules_content)
 if base_prompt_match:
     BASE_PROMPT = base_prompt_match.group(1).strip()
 else:
-    BASE_PROMPT = "Please review the following student essay. Provide feedback and a score."
+    BASE_PROMPT = "This is my student essay. It's a personal assignment.\nYou are a grader for student essays. Please review the essay based on the details and the arguments made in the essay.\n\nPlease score each question (1-5) out of 20 points each, and provide a total score out of 100.\n\nOutput your results in this exact format:\n\nQuestion 1: [score]/20\nQuestion 2: [score]/20\nQuestion 3: [score]/20\nQuestion 4: [score]/20\nQuestion 5: [score]/20\n\nTotal Score: [total]/100\nFeedback: [in Bahasa Indonesia]\n\nFor the feedback, focus specifically on the question with the LOWEST score. Explain why the student received that low score and what specific improvements are needed for that particular question. Be detailed and constructive in your criticism."
 
 def extract_text_from_pdf(file_path: str) -> str:
     text = ""
@@ -32,74 +29,84 @@ def extract_text_from_pdf(file_path: str) -> str:
             text += page.extract_text() or ''
     return text
 
-def extract_text_from_docx(file_path: str) -> str:
-    doc = Document(file_path)
-    return '\n'.join([para.text for para in doc.paragraphs])
-
 def get_student_name_from_filename(filename: str) -> str:
-    # Remove extension and replace underscores/dashes with spaces
     name = os.path.splitext(os.path.basename(filename))[0]
     return name.replace('_', ' ').replace('-', ' ')
 
-class ScoreDetail(BaseModel):
-    problem_number: int
-    score: int
-
-class StudentReview(BaseModel):
-    student_name: str
-    score_details: List[ScoreDetail]
-    overall_feedback: str  # One-line summary, focused on lowest score
-
-def call_gemini_api(prompt: str, essay: str, student_name: str) -> StudentReview:
+def call_gemini_api(prompt: str, essay: str, student_name: str):
     model = genai.GenerativeModel('gemini-2.5-flash')
     response = model.generate_content(f"{prompt}\n\n{essay}")
-    response_text = response.text
-    # Parse the response text to extract scores and feedback
-    score_details, overall_feedback = parse_gemini_response(response_text)
-    return StudentReview(
-        student_name=student_name,
-        score_details=score_details,
-        overall_feedback=overall_feedback
-    )
+    return response.text
 
-def parse_gemini_response(response: str):
-    # Try to extract scores for problems 1-5 and a one-line feedback
-    # Example expected format in response:
-    # Problem 1: 18/20\nProblem 2: 15/20\n...\nFeedback: ...
-    score_details = []
+def parse_personal_response(response: str):
+    # Extract scores for each question (1-5) and total score
+    scores = {}
     for i in range(1, 6):
-        match = re.search(rf"[Pp]roblem\s*{i}[^\d]*(\d{{1,2}})\s*/\s*20", response)
+        match = re.search(rf"[Qq]uestion\s*{i}[^\d]*(\d{{1,2}})\s*/\s*20", response)
         if match:
-            score = int(match.group(1))
-            score_details.append(ScoreDetail(problem_number=i, score=score))
+            scores[f"num_{i}"] = int(match.group(1))
         else:
-            # If not found, assume 0 or missing
-            score_details.append(ScoreDetail(problem_number=i, score=0))
-    # Try to extract a one-line feedback (first line with 'feedback' or last line)
+            scores[f"num_{i}"] = 0
+    
+    # Extract total score
+    total_match = re.search(r'[Tt]otal\s*[Ss]core\s*[:\-]?\s*(\d{1,3})\s*/\s*100', response)
+    total_score = int(total_match.group(1)) if total_match else sum(scores.values())
+    
+    # Extract feedback
     feedback_match = re.search(r'[Ff]eedback\s*[:\-]?\s*(.*)', response)
-    if feedback_match:
-        overall_feedback = feedback_match.group(1).strip()
-    else:
-        # fallback: last non-empty line
-        lines = [l.strip() for l in response.splitlines() if l.strip()]
-        overall_feedback = lines[-1] if lines else ""
-    return score_details, overall_feedback
+    feedback = feedback_match.group(1).strip() if feedback_match else ""
+    
+    return scores, total_score, feedback
+
+def format_raw_response_as_json(response: str, scores: dict, total_score: int, feedback: str):
+    """Format the raw response as structured JSON"""
+    # Extract the structured parts from the response
+    structured_response = {
+        "question_scores": scores,
+        "total_score": f"{total_score}/100",
+        "feedback": feedback,
+        "raw_text": response.strip()
+    }
+    return structured_response
 
 def main():
     results = []
-    for file_path in glob.glob('*.pdf') + glob.glob('*.docx'):
-        print(f"Processing {file_path}...")
-        if file_path.endswith('.pdf'):
-            essay_text = extract_text_from_pdf(file_path)
-        else:
-            essay_text = extract_text_from_docx(file_path)
-        student_name = get_student_name_from_filename(file_path)
-        review = call_gemini_api(BASE_PROMPT, essay_text, student_name)
-        results.append(review.dict())
+    # Find all StudentAnswer* directories
+    for root, dirs, files in os.walk('.'):
+        if os.path.basename(root).startswith('StudentAnswer'):
+            # Recursively find all PDF and DOCX files in this directory
+            for dirpath, _, filenames in os.walk(root):
+                for filename in filenames:
+                    if filename.lower().endswith('.pdf') or filename.lower().endswith('.docx'):
+                        file_path = os.path.join(dirpath, filename)
+                        print(f"Processing {file_path}...")
+                        if file_path.endswith('.pdf'):
+                            essay_text = extract_text_from_pdf(file_path)
+                        else:
+                            doc = Document(file_path)
+                            essay_text = '\n'.join([para.text for para in doc.paragraphs])
+                        student_name = get_student_name_from_filename(filename)
+                        response = call_gemini_api(BASE_PROMPT, essay_text, student_name)
+                        scores, total_score, feedback = parse_personal_response(response)
+                        structured_raw_response = format_raw_response_as_json(response, scores, total_score, feedback)
+                        result = {
+                            'student_name': student_name,
+                            'score': scores,
+                            'total_score': f"{total_score}/100",
+                            'feedback': feedback,
+                            'raw_response': structured_raw_response,
+                            'file_path': file_path
+                        }
+                        results.append(result)
+                        print(f"{student_name}:")
+                        for i in range(1, 6):
+                            print(f"  Question {i}: {scores[f'num_{i}']}/20")
+                        print(f"  Total Score: {total_score}/100")
+                        print(f"  Feedback: {feedback}\n")
     # Save to JSON
-    with open('results.json', 'w') as f:
+    with open('personal_results.json', 'w') as f:
         json.dump(results, f, indent=2)
-    print("Results saved to results.json")
+    print("Results saved to personal_results.json")
 
 if __name__ == "__main__":
     main() 
