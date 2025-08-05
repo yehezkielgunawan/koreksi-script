@@ -5,18 +5,22 @@ Use `uv` by default.
 Create the basic Python script to read the PDF and .doc files (can be bulk by putting *.pdf for example). Here's the base prompt that process the docs review:
 
 ---
-This is my student essay. There's 5 numbers of problems that need to solved (most of them is open questions). Each number has maximum 20 for the score, so the total will be 100 for all of them.
+This is my student essay. It's a personal assignment.
 
-You are a grader for student essays. Each essay contains answers to 5 problems, each worth up to 20 points (total 100). For each problem, review the answer and assign a score (0-20). Then, provide a one-line summary of feedback, focusing on the lowest-scoring problem.
+You are a grader for student essays. Please review the essay based on the details and the arguments made in the essay.
+
+Please score each question (1-5) out of 20 points each, and provide a total score out of 100.
 
 Output your results in this exact format:
 
-Problem 1: <score>/20
-Problem 2: <score>/20
-Problem 3: <score>/20
-Problem 4: <score>/20
-Problem 5: <score>/20
-Feedback: <one-line feedback focusing on the lowest score>
+Question 1: [score]/20
+Question 2: [score]/20
+Question 3: [score]/20
+Question 4: [score]/20
+Question 5: [score]/20
 
-Yeah like that
+Total Score: [total]/100
+Feedback: [in Bahasa Indonesia]
+
+For the feedback, focus specifically on the question with the LOWEST score. Explain why the student received that low score and what specific improvements are needed for that particular question. Be detailed and constructive in your criticism.
 ---
