@@ -149,7 +149,7 @@ def find_student_files():
         if os.path.basename(root).startswith('StudentAnswer'):
             for dirpath, _, filenames in os.walk(root):
                 for filename in filenames:
-                    if filename.lower().endswith(('.pdf', '.docx', 'doc')):
+                    if filename.lower().endswith(('.pdf', '.docx', '.doc')):
                         file_path = os.path.join(dirpath, filename)
                         files_to_process.append(file_path)
 
