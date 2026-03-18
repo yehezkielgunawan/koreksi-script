@@ -1,7 +1,8 @@
 """
 Student Personal Assignment Score Checker
 
-This script reviews student essay assignments using the Gemini API.
+This script reviews student essay assignments using OpenRouter API
+with the Qwen3 235B A22B model.
 It dynamically parses scoring configuration from the prompt file.
 """
 
@@ -9,15 +10,16 @@ import json
 import logging
 import os
 import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-import google.generativeai as genai
 import PyPDF2
 from docx import Document
 from dotenv import load_dotenv
+from openai import OpenAI
 
 # Configure logging
 logging.basicConfig(
@@ -28,27 +30,32 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-genai.configure(api_key=GOOGLE_API_KEY)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
+    raise ValueError("OPENROUTER_API_KEY not found in .env file")
+
+# OpenRouter client (OpenAI-compatible)
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
+OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 
 # Constants
 PROMPT_FILE = "Individual_Prompts.md"
 OUTPUT_FILE = "individual_results.json"
 STUDENT_ANSWER_PREFIX = "StudentAnswer"
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc"}
-QUESTION_FILE_KEYWORDS = {"question", "soal", "pertanyaan"}
+SKIP_FILE_KEYWORDS = {
+    "question", "soal", "pertanyaan",       # Question files
+    "attachment",                            # Question attachments
+    "ai_usage", "ai form", "declaration",   # AI declaration forms
+}
 
-# Rate Limiting Constants (Gemini Free Tier: 5 RPM, 20 RPD)
-REQUESTS_PER_MINUTE = 5
-REQUESTS_PER_DAY = 20
-SECONDS_BETWEEN_REQUESTS = 60 / REQUESTS_PER_MINUTE  # 12 seconds
+# Rate Limiting Constants
+SECONDS_BETWEEN_REQUESTS = 2  # Small delay to be polite to the API
 MAX_RETRIES = 3
-RETRY_BACKOFF_MULTIPLIER = 2  # Exponential backoff multiplier
-
-
-class DailyLimitReachedException(Exception):
-    """Exception raised when Gemini daily request limit is reached."""
-    pass
+RETRY_BACKOFF_MULTIPLIER = 2
 
 
 @dataclass
@@ -209,6 +216,30 @@ def extract_text_from_docx(file_path: Path) -> str:
     return "\n".join(para.text for para in doc.paragraphs)
 
 
+def extract_text_from_doc(file_path: Path) -> str:
+    """
+    Extract text from a legacy .doc file using macOS textutil.
+
+    Falls back to python-docx if textutil is not available (non-macOS).
+    """
+    try:
+        result = subprocess.run(
+            ["textutil", "-convert", "txt", "-stdout", str(file_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+        logger.warning(f"textutil returned empty/error for {file_path.name}, trying python-docx fallback")
+    except FileNotFoundError:
+        logger.warning("textutil not found (not on macOS?), trying python-docx fallback")
+    except subprocess.TimeoutExpired:
+        logger.warning(f"textutil timed out for {file_path.name}, trying python-docx fallback")
+
+    return extract_text_from_docx(file_path)
+
+
 def extract_text(file_path: Path) -> str:
     """
     Extract text from a file based on its extension.
@@ -219,15 +250,10 @@ def extract_text(file_path: Path) -> str:
 
     if suffix == ".pdf":
         return extract_text_from_pdf(file_path)
-    elif suffix in {".docx", ".doc"}:
-        try:
-            return extract_text_from_docx(file_path)
-        except Exception as e:
-            if suffix == ".doc":
-                raise ValueError(
-                    f"Legacy .doc format may not be fully supported: {file_path}"
-                ) from e
-            raise
+    elif suffix == ".doc":
+        return extract_text_from_doc(file_path)
+    elif suffix == ".docx":
+        return extract_text_from_docx(file_path)
     else:
         raise ValueError(f"Unsupported file type: {suffix}")
 
@@ -237,14 +263,17 @@ def extract_text(file_path: Path) -> str:
 # =============================================================================
 
 
-def is_question_file(filename: str) -> bool:
+def is_non_answer_file(filename: str) -> bool:
     """
-    Check if a filename appears to be a question file (not a student answer).
+    Check if a filename is NOT a student answer (i.e., should be skipped).
 
-    Question files typically contain words like 'question', 'soal', 'pertanyaan'.
+    Skips:
+    - Question files (containing 'question', 'soal', 'pertanyaan')
+    - Question attachments (containing 'attachment')
+    - AI declaration forms (containing 'ai_usage', 'ai form', 'declaration')
     """
     filename_lower = filename.lower()
-    return any(keyword in filename_lower for keyword in QUESTION_FILE_KEYWORDS)
+    return any(keyword in filename_lower for keyword in SKIP_FILE_KEYWORDS)
 
 
 def get_student_name_from_path(file_path: Path) -> str:
@@ -269,11 +298,14 @@ def get_student_name_from_path(file_path: Path) -> str:
 
 def find_student_files(base_dir: Path = Path(".")) -> list[Path]:
     """
-    Find all student answer files in StudentAnswer* directories.
+    Find student answer files in StudentAnswer* directories.
 
-    Filters out:
-    - Question files (containing 'question', 'soal', etc.)
-    - Files without supported extensions
+    For each student folder, picks exactly ONE answer file by:
+    1. Filtering out non-answer files (questions, attachments, AI forms)
+    2. Filtering out unsupported extensions
+    3. If multiple candidates remain, picking the first one (sorted by name)
+
+    Logs skipped files for transparency.
     """
     files_to_process = []
 
@@ -283,46 +315,61 @@ def find_student_files(base_dir: Path = Path(".")) -> list[Path]:
 
         logger.info(f"Scanning directory: {item.name}")
 
-        # Walk through all subdirectories
-        for file_path in item.rglob("*"):
-            if not file_path.is_file():
+        # Group files by student folder (immediate subdirectories)
+        student_folders = [d for d in item.iterdir() if d.is_dir()]
+
+        for student_folder in sorted(student_folders):
+            candidates = []
+
+            for file_path in student_folder.rglob("*"):
+                if not file_path.is_file():
+                    continue
+
+                # Skip unsupported extensions
+                if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                    continue
+
+                # Skip non-answer files
+                if is_non_answer_file(file_path.name):
+                    logger.debug(f"Skipping non-answer file: {file_path.name}")
+                    continue
+
+                candidates.append(file_path)
+
+            if not candidates:
+                logger.warning(
+                    f"No answer file found for student: {student_folder.name}"
+                )
                 continue
 
-            # Check extension
-            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
+            if len(candidates) > 1:
+                logger.warning(
+                    f"Multiple answer candidates for {student_folder.name}: "
+                    f"{[c.name for c in candidates]}. Using first one."
+                )
 
-            # Skip question files
-            if is_question_file(file_path.name):
-                logger.debug(f"Skipping question file: {file_path.name}")
-                continue
+            # Pick the first candidate (sorted by name for consistency)
+            candidates.sort(key=lambda p: p.name)
+            files_to_process.append(candidates[0])
 
-            files_to_process.append(file_path)
-
-    # Sort by path for consistent ordering
     files_to_process.sort()
 
     return files_to_process
 
 
 # =============================================================================
-# Gemini API Integration with Rate Limiting
+# OpenRouter API Integration
 # =============================================================================
 
 
 class RateLimiter:
-    """
-    Simple rate limiter to respect Gemini's free tier limits.
-
-    Ensures minimum delay between API calls and tracks request timing.
-    """
+    """Ensures minimum delay between API calls."""
 
     def __init__(self, min_interval: float = SECONDS_BETWEEN_REQUESTS):
         self.min_interval = min_interval
         self.last_request_time: Optional[float] = None
 
     def wait_if_needed(self):
-        """Wait if necessary to respect rate limits."""
         if self.last_request_time is None:
             self.last_request_time = time.time()
             return
@@ -336,100 +383,55 @@ class RateLimiter:
         self.last_request_time = time.time()
 
 
-# Global rate limiter instance
 _rate_limiter = RateLimiter()
 
 
-def is_daily_limit_error(error_str: str) -> bool:
+def call_llm_api(prompt: str, essay_text: str) -> str:
     """
-    Check if the error indicates a daily quota limit has been reached.
-    
-    Based on actual Gemini error format:
-    - quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
-    - quota_value: 20
+    Call OpenRouter API (Qwen3 235B A22B) to grade an essay.
+
+    Uses the OpenAI-compatible endpoint with retry logic.
     """
-    error_lower = error_str.lower()
-    daily_indicators = [
-        "perday",  # Matches "PerDayPerProject" in quota_id
-        "per day",
-        "daily limit",
-        "daily quota",
-        "freetier",  # Matches "FreeTier" in quota_id
-        "generaterequestsperday",  # Matches the quota metric
-        "requests_per_day",
-    ]
-    return any(indicator in error_lower for indicator in daily_indicators)
-
-
-def call_gemini_api(prompt: str, essay_text: str) -> str:
-    """
-    Call the Gemini API to grade an essay with rate limiting and retry logic.
-
-    Args:
-        prompt: The grading prompt/instructions
-        essay_text: The student's essay content
-
-    Returns:
-        The model's response text
-
-    Raises:
-        DailyLimitReachedException: If daily request limit is reached
-        Exception: If all retries are exhausted
-    """
-    model = genai.GenerativeModel("gemini-3-flash-preview")
     full_prompt = f"{prompt}\n\nEssay to grade:\n{essay_text}"
 
     last_exception = None
 
     for attempt in range(MAX_RETRIES):
         try:
-            # Wait for rate limit before making request
             _rate_limiter.wait_if_needed()
 
-            response = model.generate_content(full_prompt)
-            return response.text
+            response = client.chat.completions.create(
+                model=OPENROUTER_MODEL,
+                messages=[{"role": "user", "content": full_prompt}],
+            )
+
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Empty response from API")
+            return content
 
         except Exception as e:
             last_exception = e
             error_str = str(e)
 
-            # Check if daily limit is reached - don't retry, just raise immediately
-            if is_daily_limit_error(error_str):
-                logger.error(
-                    "Daily API limit reached (20 requests per day). "
-                    "Partial results will be saved. Please try again tomorrow."
-                )
-                raise DailyLimitReachedException(
-                    "Gemini API daily limit (20 requests) reached. "
-                    "Please wait until tomorrow to continue processing."
-                ) from e
-
-            # Check if it's a rate limit error (429) - per-minute limit, can retry
-            if "429" in error_str or "quota" in error_str.lower():
-                # Calculate backoff time
-                retry_delay = SECONDS_BETWEEN_REQUESTS * (RETRY_BACKOFF_MULTIPLIER ** attempt)
-
-                # Try to extract suggested retry delay from error message
-                if "retry in" in error_str.lower():
-                    retry_match = re.search(r"retry in (\d+\.?\d*)", error_str.lower())
-                    if retry_match:
-                        retry_delay = max(float(retry_match.group(1)) + 1, retry_delay)
-
+            if "429" in error_str or "rate" in error_str.lower():
+                retry_delay = SECONDS_BETWEEN_REQUESTS * (RETRY_BACKOFF_MULTIPLIER ** (attempt + 1))
                 logger.warning(
                     f"Rate limit hit (attempt {attempt + 1}/{MAX_RETRIES}). "
-                    f"Waiting {retry_delay:.1f}s before retry..."
+                    f"Waiting {retry_delay:.1f}s..."
                 )
                 time.sleep(retry_delay)
+            elif "402" in error_str or "insufficient" in error_str.lower() or "credits" in error_str.lower():
+                logger.error("Insufficient credits on OpenRouter. Please top up your balance.")
+                raise
             else:
-                # For other errors, use standard backoff
                 retry_delay = 5 * (RETRY_BACKOFF_MULTIPLIER ** attempt)
                 logger.warning(
                     f"API error (attempt {attempt + 1}/{MAX_RETRIES}): {e}. "
-                    f"Waiting {retry_delay:.1f}s before retry..."
+                    f"Retrying in {retry_delay:.1f}s..."
                 )
                 time.sleep(retry_delay)
 
-    # All retries exhausted
     raise last_exception
 
 
@@ -454,10 +456,10 @@ def parse_grading_response(
     response: str, config: ScoringConfig, debug: bool = False
 ) -> dict:
     """
-    Parse the Gemini response and extract scores.
+    Parse the LLM response and extract scores.
 
     Args:
-        response: Raw response from Gemini
+        response: Raw response from the LLM
         config: Scoring configuration with question details
         debug: If True, include raw response in output
 
@@ -465,7 +467,7 @@ def parse_grading_response(
         Dictionary with question_scores, total_score, feedback
     """
     if debug:
-        logger.debug("Raw Gemini Response:\n%s", response)
+        logger.debug("Raw LLM Response:\n%s", response)
 
     question_scores = {}
 
@@ -548,8 +550,8 @@ def process_file(
     # Get student name
     student_name = get_student_name_from_path(file_path)
 
-    # Call Gemini API
-    response = call_gemini_api(prompt, essay_text)
+    # Call LLM API
+    response = call_llm_api(prompt, essay_text)
 
     # Parse response
     parsed = parse_grading_response(response, config, debug=debug)
@@ -589,9 +591,15 @@ def print_result_summary(student_name: str, parsed: dict, config: ScoringConfig)
 # =============================================================================
 
 
-def load_existing_results() -> tuple[list[dict], set[str]]:
+RE_REVIEW_THRESHOLD = 80
+
+
+def load_existing_results(re_review: bool = False) -> tuple[list[dict], set[str]]:
     """
     Load existing results from the output file.
+
+    When re_review=True, students who scored below REREVIEW_THRESHOLD
+    are removed from existing results so they get re-graded.
 
     Returns:
         Tuple of (existing_results_list, set_of_scored_file_paths)
@@ -606,13 +614,31 @@ def load_existing_results() -> tuple[list[dict], set[str]]:
         with open(output_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        existing_results = data.get("results", [])
+        all_results = data.get("results", [])
 
-        # Build set of file paths that have been successfully scored
-        scored_paths = {result["file_path"] for result in existing_results}
+        if re_review:
+            kept = []
+            re_review_count = 0
+            for result in all_results:
+                if result.get("total_score", 0) < RE_REVIEW_THRESHOLD:
+                    re_review_count += 1
+                    logger.info(
+                        f"Queuing re-review: {result['student_name']} "
+                        f"(score: {result.get('total_score', 0)})"
+                    )
+                else:
+                    kept.append(result)
+            if re_review_count:
+                print(
+                    f"Re-review mode: {re_review_count} students scored below "
+                    f"{RE_REVIEW_THRESHOLD} will be re-graded."
+                )
+            all_results = kept
 
-        logger.info(f"Loaded {len(existing_results)} existing results from {OUTPUT_FILE}")
-        return existing_results, scored_paths
+        scored_paths = {result["file_path"] for result in all_results}
+
+        logger.info(f"Loaded {len(all_results)} existing results from {OUTPUT_FILE}")
+        return all_results, scored_paths
 
     except (json.JSONDecodeError, KeyError) as e:
         logger.warning(f"Could not parse existing results file: {e}")
@@ -620,16 +646,7 @@ def load_existing_results() -> tuple[list[dict], set[str]]:
 
 
 def is_already_scored(file_path: Path, scored_paths: set[str]) -> bool:
-    """
-    Check if a student file has already been scored.
-
-    Args:
-        file_path: Path to the student file
-        scored_paths: Set of file paths that have been successfully scored
-
-    Returns:
-        True if the file has already been scored, False otherwise
-    """
+    """Check if a student file has already been scored."""
     return str(file_path) in scored_paths
 
 
@@ -637,18 +654,11 @@ def save_results_incrementally(
     config: ScoringConfig,
     results: list[dict],
     errors: list[dict],
-    daily_limit_reached: bool = False,
 ):
     """
     Save results to JSON file immediately after each student is processed.
     
     This ensures data is not lost if the script crashes or hits API limits.
-    
-    Args:
-        config: Scoring configuration
-        results: List of all results (existing + new)
-        errors: List of errors encountered
-        daily_limit_reached: Whether daily limit was hit
     """
     output_path = Path(OUTPUT_FILE)
     output_data = {
@@ -661,7 +671,6 @@ def save_results_incrementally(
         },
         "results": results,
         "errors": errors if errors else None,
-        "daily_limit_reached": daily_limit_reached,
     }
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -675,18 +684,21 @@ def save_results_incrementally(
 # =============================================================================
 
 
-def main(debug: bool = False):
+def main(debug: bool = False, re_review: bool = False):
     """
     Main function to process all student files.
 
     Args:
         debug: If True, enable debug logging and include raw responses
+        re_review: If True, re-grade students who scored below the threshold
     """
     if debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
     print("=" * 60)
     print("Student Personal Assignment Score Checker")
+    if re_review:
+        print(f"  MODE: Re-review (re-grading scores below {RE_REVIEW_THRESHOLD})")
     print("=" * 60)
 
     # Load prompt and configuration
@@ -698,7 +710,7 @@ def main(debug: bool = False):
     print("-" * 60)
 
     # Load existing results to skip already-scored students
-    existing_results, scored_paths = load_existing_results()
+    existing_results, scored_paths = load_existing_results(re_review=re_review)
     if scored_paths:
         print(f"Found {len(scored_paths)} students already scored (will be skipped)")
     print("-" * 60)
@@ -727,9 +739,8 @@ def main(debug: bool = False):
         return
 
     # Process new files only with incremental saving
-    all_results = existing_results.copy()  # Start with existing results
+    all_results = existing_results.copy()
     errors = []
-    daily_limit_reached = False
     newly_scored_count = 0
 
     for idx, file_path in enumerate(files_to_process):
@@ -738,34 +749,15 @@ def main(debug: bool = False):
             all_results.append(result)
             newly_scored_count += 1
             
-            # Save immediately after each successful grading
-            save_results_incrementally(config, all_results, errors, daily_limit_reached)
+            save_results_incrementally(config, all_results, errors)
             print(f"  [Saved to {OUTPUT_FILE}]")
-            
-        except DailyLimitReachedException as e:
-            # Daily limit reached - results already saved incrementally
-            daily_limit_reached = True
-            print("\n" + "!" * 60)
-            print("DAILY LIMIT REACHED")
-            print("!" * 60)
-            print(f"Gemini API daily limit (20 requests) has been reached.")
-            print(f"Processed {newly_scored_count} students before limit was hit.")
-            remaining = len(files_to_process) - idx
-            print(f"Remaining {remaining} students will need to wait.")
-            print("Please run the script again tomorrow to continue.")
-            print("!" * 60)
-            
-            # Final save with daily_limit_reached flag
-            save_results_incrementally(config, all_results, errors, daily_limit_reached=True)
-            break
             
         except Exception as e:
             error_msg = f"Error processing {file_path}: {e}"
             logger.error(error_msg)
             errors.append({"file_path": str(file_path), "error": str(e)})
             
-            # Save even when there's an error to preserve progress
-            save_results_incrementally(config, all_results, errors, daily_limit_reached)
+            save_results_incrementally(config, all_results, errors)
 
     # Final summary
     print("\n" + "=" * 60)
@@ -776,11 +768,6 @@ def main(debug: bool = False):
     print(f"  - Newly scored: {newly_scored_count}")
     if errors:
         print(f"Errors: {len(errors)} files failed")
-    
-    if daily_limit_reached:
-        remaining = len(files_to_process) - newly_scored_count
-        print(f"\n⚠️  DAILY LIMIT REACHED - {remaining} students still pending")
-        print("   Run the script again tomorrow to continue processing.")
 
     print("=" * 60)
 
@@ -788,6 +775,6 @@ def main(debug: bool = False):
 if __name__ == "__main__":
     import sys
 
-    # Simple debug flag support
     debug_mode = "--debug" in sys.argv or "-d" in sys.argv
-    main(debug=debug_mode)
+    re_review_mode = "--re-review" in sys.argv
+    main(debug=debug_mode, re_review=re_review_mode)

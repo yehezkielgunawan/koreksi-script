@@ -2,5 +2,5 @@ PyPDF2
 python-docx
 python-dotenv
 requests
-google-generativeai
+openai
 pydantic
