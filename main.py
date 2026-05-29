@@ -13,6 +13,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
 
@@ -53,7 +54,13 @@ SKIP_FILE_KEYWORDS = {
 }
 
 # Rate Limiting Constants
-SECONDS_BETWEEN_REQUESTS = 2  # Small delay to be polite to the API
+# OpenRouter limits (https://openrouter.ai/docs/api/reference/limits):
+#   - Free models (`:free` suffix): 20 RPM (60s / 20 = 3s minimum spacing)
+#   - Paid / pay-as-you-go models: no platform-level rate limit
+# We auto-detect from the model ID and skip the local delay for paid models;
+# the 429 retry logic below still acts as a safety net either way.
+IS_FREE_MODEL = OPENROUTER_MODEL.endswith(":free")
+SECONDS_BETWEEN_REQUESTS = 3.0 if IS_FREE_MODEL else 0.0
 MAX_RETRIES = 3
 RETRY_BACKOFF_MULTIPLIER = 2
 
@@ -240,6 +247,30 @@ def extract_text_from_doc(file_path: Path) -> str:
     return extract_text_from_docx(file_path)
 
 
+class HTMLStripper(HTMLParser):
+    """HTML parser that extracts plain text."""
+
+    def __init__(self):
+        super().__init__()
+        self.text_parts: list[str] = []
+
+    def handle_data(self, data: str):
+        self.text_parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self.text_parts)
+
+
+def extract_text_from_html(file_path: Path) -> str:
+    """Extract plain text from an HTML file."""
+    content = file_path.read_text(encoding="utf-8")
+    stripper = HTMLStripper()
+    stripper.feed(content)
+    text = stripper.get_text()
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 def extract_text(file_path: Path) -> str:
     """
     Extract text from a file based on its extension.
@@ -296,7 +327,7 @@ def get_student_name_from_path(file_path: Path) -> str:
     return name.replace("_", " ").replace("-", " ")
 
 
-def find_student_files(base_dir: Path = Path(".")) -> list[Path]:
+def find_student_files(base_dir: Path = Path(".")) -> list[tuple[Path, Optional[Path]]]:
     """
     Find student answer files in StudentAnswer* directories.
 
@@ -305,9 +336,14 @@ def find_student_files(base_dir: Path = Path(".")) -> list[Path]:
     2. Filtering out unsupported extensions
     3. If multiple candidates remain, picking the first one (sorted by name)
 
+    Also looks for Question.html in each student folder for per-student questions.
+
+    Returns:
+        List of (answer_file_path, question_html_path_or_None) tuples.
+
     Logs skipped files for transparency.
     """
-    files_to_process = []
+    files_to_process: list[tuple[Path, Optional[Path]]] = []
 
     for item in base_dir.iterdir():
         if not item.is_dir() or not item.name.startswith(STUDENT_ANSWER_PREFIX):
@@ -320,9 +356,15 @@ def find_student_files(base_dir: Path = Path(".")) -> list[Path]:
 
         for student_folder in sorted(student_folders):
             candidates = []
+            question_html_path: Optional[Path] = None
 
             for file_path in student_folder.rglob("*"):
                 if not file_path.is_file():
+                    continue
+
+                # Check for Question.html
+                if file_path.name.lower() == "question.html":
+                    question_html_path = file_path
                     continue
 
                 # Skip unsupported extensions
@@ -350,9 +392,15 @@ def find_student_files(base_dir: Path = Path(".")) -> list[Path]:
 
             # Pick the first candidate (sorted by name for consistency)
             candidates.sort(key=lambda p: p.name)
-            files_to_process.append(candidates[0])
 
-    files_to_process.sort()
+            if question_html_path:
+                logger.debug(f"Found Question.html for {student_folder.name}")
+            else:
+                logger.debug(f"No Question.html found for {student_folder.name}")
+
+            files_to_process.append((candidates[0], question_html_path))
+
+    files_to_process.sort(key=lambda x: x[0])
 
     return files_to_process
 
@@ -363,13 +411,20 @@ def find_student_files(base_dir: Path = Path(".")) -> list[Path]:
 
 
 class RateLimiter:
-    """Ensures minimum delay between API calls."""
+    """Ensures minimum delay between API calls.
+
+    When `min_interval` is 0 (e.g. paid OpenRouter models with no platform
+    rate limit), this becomes a no-op and adds zero overhead per request.
+    """
 
     def __init__(self, min_interval: float = SECONDS_BETWEEN_REQUESTS):
         self.min_interval = min_interval
         self.last_request_time: Optional[float] = None
 
     def wait_if_needed(self):
+        if self.min_interval <= 0:
+            return
+
         if self.last_request_time is None:
             self.last_request_time = time.time()
             return
@@ -415,7 +470,8 @@ def call_llm_api(prompt: str, essay_text: str) -> str:
             error_str = str(e)
 
             if "429" in error_str or "rate" in error_str.lower():
-                retry_delay = SECONDS_BETWEEN_REQUESTS * (RETRY_BACKOFF_MULTIPLIER ** (attempt + 1))
+                base_delay = SECONDS_BETWEEN_REQUESTS if SECONDS_BETWEEN_REQUESTS > 0 else 5
+                retry_delay = base_delay * (RETRY_BACKOFF_MULTIPLIER ** (attempt + 1))
                 logger.warning(
                     f"Rate limit hit (attempt {attempt + 1}/{MAX_RETRIES}). "
                     f"Waiting {retry_delay:.1f}s..."
@@ -525,16 +581,21 @@ def parse_grading_response(
 
 
 def process_file(
-    file_path: Path, prompt: str, config: ScoringConfig, debug: bool = False
+    file_path: Path,
+    prompt: str,
+    config: ScoringConfig,
+    debug: bool = False,
+    question_html_path: Optional[Path] = None,
 ) -> dict:
     """
     Process a single student file and return grading results.
 
     Args:
         file_path: Path to the student's answer file
-        prompt: The grading prompt
+        prompt: The grading prompt (may contain {QUESTIONS} placeholder)
         config: Scoring configuration
         debug: If True, include debug info in results
+        question_html_path: Optional path to student's Question.html
 
     Returns:
         Dictionary with student name, scores, and feedback
@@ -550,8 +611,21 @@ def process_file(
     # Get student name
     student_name = get_student_name_from_path(file_path)
 
+    # Build final prompt with per-student questions if available
+    final_prompt = prompt
+    if "{QUESTIONS}" in prompt:
+        if question_html_path and question_html_path.exists():
+            questions_text = extract_text_from_html(question_html_path)
+            final_prompt = prompt.replace("{QUESTIONS}", questions_text)
+            logger.info(f"Injected questions from {question_html_path.name}")
+        else:
+            logger.warning(
+                f"Prompt has {{QUESTIONS}} placeholder but no Question.html found for {student_name}. "
+                "Using prompt as-is."
+            )
+
     # Call LLM API
-    response = call_llm_api(prompt, essay_text)
+    response = call_llm_api(final_prompt, essay_text)
 
     # Parse response
     parsed = parse_grading_response(response, config, debug=debug)
@@ -699,6 +773,12 @@ def main(debug: bool = False, re_review: bool = False):
     print("Student Personal Assignment Score Checker")
     if re_review:
         print(f"  MODE: Re-review (re-grading scores below {RE_REVIEW_THRESHOLD})")
+    tier = "free (20 RPM)" if IS_FREE_MODEL else "paid (no rate limit)"
+    print(f"  Model: {OPENROUTER_MODEL} [{tier}]")
+    if SECONDS_BETWEEN_REQUESTS > 0:
+        print(f"  Min interval between requests: {SECONDS_BETWEEN_REQUESTS}s")
+    else:
+        print("  Min interval between requests: 0s (no local throttle)")
     print("=" * 60)
 
     # Load prompt and configuration
@@ -725,7 +805,7 @@ def main(debug: bool = False, re_review: bool = False):
 
     # Filter out already-scored files
     files_to_process = [
-        f for f in all_files if not is_already_scored(f, scored_paths)
+        (f, q) for f, q in all_files if not is_already_scored(f, scored_paths)
     ]
 
     print(f"Found {len(all_files)} total student files.")
@@ -743,9 +823,11 @@ def main(debug: bool = False, re_review: bool = False):
     errors = []
     newly_scored_count = 0
 
-    for idx, file_path in enumerate(files_to_process):
+    for idx, (file_path, question_html_path) in enumerate(files_to_process):
         try:
-            result = process_file(file_path, prompt, config, debug=debug)
+            result = process_file(
+                file_path, prompt, config, debug=debug, question_html_path=question_html_path
+            )
             all_results.append(result)
             newly_scored_count += 1
             

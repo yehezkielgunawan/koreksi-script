@@ -27,6 +27,12 @@ ENV/
 results.json
 *.log
 
+# Serena (code analysis tool)
+.serena/
+
+# Student answer folders (local use only)
+StudentAnswer*/
+
 # Other
 *.bak
 *.swp
