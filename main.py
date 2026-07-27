@@ -17,7 +17,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
 
-import PyPDF2
+import pypdf
 from docx import Document
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -40,7 +40,8 @@ client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
 )
-OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+# OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
 
 # Constants
 PROMPT_FILE = "Individual_Prompts.md"
@@ -48,9 +49,13 @@ OUTPUT_FILE = "individual_results.json"
 STUDENT_ANSWER_PREFIX = "StudentAnswer"
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc"}
 SKIP_FILE_KEYWORDS = {
-    "question", "soal", "pertanyaan",       # Question files
-    "attachment",                            # Question attachments
-    "ai_usage", "ai form", "declaration",   # AI declaration forms
+    "question",
+    "soal",
+    "pertanyaan",  # Question files
+    "attachment",  # Question attachments
+    "ai_usage",
+    "ai form",
+    "declaration",  # AI declaration forms
 }
 
 # Rate Limiting Constants
@@ -209,7 +214,7 @@ def extract_text_from_pdf(file_path: Path) -> str:
     """Extract text content from a PDF file."""
     text_parts = []
     with open(file_path, "rb") as f:
-        reader = PyPDF2.PdfReader(f)
+        reader = pypdf.PdfReader(f)
         for page in reader.pages:
             page_text = page.extract_text()
             if page_text:
@@ -238,11 +243,17 @@ def extract_text_from_doc(file_path: Path) -> str:
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout
-        logger.warning(f"textutil returned empty/error for {file_path.name}, trying python-docx fallback")
+        logger.warning(
+            f"textutil returned empty/error for {file_path.name}, trying python-docx fallback"
+        )
     except FileNotFoundError:
-        logger.warning("textutil not found (not on macOS?), trying python-docx fallback")
+        logger.warning(
+            "textutil not found (not on macOS?), trying python-docx fallback"
+        )
     except subprocess.TimeoutExpired:
-        logger.warning(f"textutil timed out for {file_path.name}, trying python-docx fallback")
+        logger.warning(
+            f"textutil timed out for {file_path.name}, trying python-docx fallback"
+        )
 
     return extract_text_from_docx(file_path)
 
@@ -470,18 +481,26 @@ def call_llm_api(prompt: str, essay_text: str) -> str:
             error_str = str(e)
 
             if "429" in error_str or "rate" in error_str.lower():
-                base_delay = SECONDS_BETWEEN_REQUESTS if SECONDS_BETWEEN_REQUESTS > 0 else 5
+                base_delay = (
+                    SECONDS_BETWEEN_REQUESTS if SECONDS_BETWEEN_REQUESTS > 0 else 5
+                )
                 retry_delay = base_delay * (RETRY_BACKOFF_MULTIPLIER ** (attempt + 1))
                 logger.warning(
                     f"Rate limit hit (attempt {attempt + 1}/{MAX_RETRIES}). "
                     f"Waiting {retry_delay:.1f}s..."
                 )
                 time.sleep(retry_delay)
-            elif "402" in error_str or "insufficient" in error_str.lower() or "credits" in error_str.lower():
-                logger.error("Insufficient credits on OpenRouter. Please top up your balance.")
+            elif (
+                "402" in error_str
+                or "insufficient" in error_str.lower()
+                or "credits" in error_str.lower()
+            ):
+                logger.error(
+                    "Insufficient credits on OpenRouter. Please top up your balance."
+                )
                 raise
             else:
-                retry_delay = 5 * (RETRY_BACKOFF_MULTIPLIER ** attempt)
+                retry_delay = 5 * (RETRY_BACKOFF_MULTIPLIER**attempt)
                 logger.warning(
                     f"API error (attempt {attempt + 1}/{MAX_RETRIES}): {e}. "
                     f"Retrying in {retry_delay:.1f}s..."
@@ -547,7 +566,9 @@ def parse_grading_response(
             question_scores[q.number] = 0
 
     # Extract total score
-    total_pattern = rf"[Tt]otal\s*[Ss]core\s*[:\-]?\s*(\d{{1,3}})\s*/\s*{config.total_max_score}"
+    total_pattern = (
+        rf"[Tt]otal\s*[Ss]core\s*[:\-]?\s*(\d{{1,3}})\s*/\s*{config.total_max_score}"
+    )
     total_match = re.search(total_pattern, response)
 
     if total_match:
@@ -731,7 +752,7 @@ def save_results_incrementally(
 ):
     """
     Save results to JSON file immediately after each student is processed.
-    
+
     This ensures data is not lost if the script crashes or hits API limits.
     """
     output_path = Path(OUTPUT_FILE)
@@ -749,7 +770,7 @@ def save_results_incrementally(
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
-    
+
     logger.debug(f"Results saved incrementally ({len(results)} students)")
 
 
@@ -826,19 +847,23 @@ def main(debug: bool = False, re_review: bool = False):
     for idx, (file_path, question_html_path) in enumerate(files_to_process):
         try:
             result = process_file(
-                file_path, prompt, config, debug=debug, question_html_path=question_html_path
+                file_path,
+                prompt,
+                config,
+                debug=debug,
+                question_html_path=question_html_path,
             )
             all_results.append(result)
             newly_scored_count += 1
-            
+
             save_results_incrementally(config, all_results, errors)
             print(f"  [Saved to {OUTPUT_FILE}]")
-            
+
         except Exception as e:
             error_msg = f"Error processing {file_path}: {e}"
             logger.error(error_msg)
             errors.append({"file_path": str(file_path), "error": str(e)})
-            
+
             save_results_incrementally(config, all_results, errors)
 
     # Final summary

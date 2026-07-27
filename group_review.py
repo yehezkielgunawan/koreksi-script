@@ -1,7 +1,7 @@
 import os
 import json
 import re
-import PyPDF2
+import pypdf
 import google.generativeai as genai
 from dotenv import load_dotenv
 from docx import Document
@@ -53,7 +53,7 @@ def extract_text_from_pdf(file_path: str) -> str:
     """Extract text content from PDF file"""
     text = ""
     with open(file_path, 'rb') as f:
-        reader = PyPDF2.PdfReader(f)
+        reader = pypdf.PdfReader(f)
         for page in reader.pages:
             text += page.extract_text() or ''
     return text
