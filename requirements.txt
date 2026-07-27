@@ -1,6 +1,10 @@
-PyPDF2
+openai
+pdfplumber
+pydantic
+pypdf
+pypdfium2
 python-docx
 python-dotenv
+PyYAML
 requests
-openai
-pydantic
+tenacity
