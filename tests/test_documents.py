@@ -1,16 +1,26 @@
-from pathlib import Path
 import sys
+from pathlib import Path
+import shutil
+import subprocess
 
+from docx import Document
+from pypdf import PdfReader, PdfWriter
+import pytest
 
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import grader_core.documents as documents
 from grader_core.documents import (
     AMBIGUOUS_ANSWER_FILES,
+    DOCUMENT_CONVERSION_FAILED,
+    DOCUMENT_CONVERSION_UNAVAILABLE,
     MISSING_ANSWER_FILE,
+    NormalizationFailure,
     SubmissionFiles,
     discover_submissions,
     extract_html_blocks,
+    normalize_document,
 )
 
 
@@ -93,4 +103,106 @@ def test_extract_html_blocks_preserves_numbered_questions() -> None:
         "Evidence\n\n"
         "Question 2\n"
         "Apply ISO 31000."
+    )
+
+
+def test_normalize_pdf_preserves_page_count_and_page_diagnostics(
+    tmp_path: Path, synthetic_pdf_files: dict[str, Path]
+) -> None:
+    source_path = tmp_path / "combined.pdf"
+    writer = PdfWriter()
+    writer.append(PdfReader(synthetic_pdf_files["text"]))
+    writer.append(PdfReader(synthetic_pdf_files["table"]))
+    writer.append(PdfReader(synthetic_pdf_files["image_only"]))
+    with source_path.open("wb") as stream:
+        writer.write(stream)
+
+    normalized = normalize_document(source_path, tmp_path / "run-temp")
+
+    assert normalized.source_path == source_path
+    assert normalized.pdf_path == source_path
+    assert normalized.source_sha256 == normalized.pdf_sha256
+    assert [page.number for page in normalized.pages] == [1, 2, 3]
+    assert "Jawaban normal" in normalized.pages[0].text
+    assert normalized.pages[1].has_table is True
+    assert normalized.pages[2].text == ""
+    assert len(normalized.pages[2].image_hashes) == 1
+
+
+def test_normalize_docx_runs_bounded_libreoffice_conversion(
+    tmp_path: Path,
+    synthetic_pdf_files: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_path = tmp_path / "answer.docx"
+    document = Document()
+    document.add_paragraph("Answer content")
+    document.save(source_path)
+    temporary_dir = tmp_path / "run-temp"
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        output_path = temporary_dir / "answer.pdf"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(synthetic_pdf_files["text"], output_path)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(documents.shutil, "which", lambda _name: "libreoffice")
+    monkeypatch.setattr(documents.subprocess, "run", fake_run)
+
+    normalized = normalize_document(source_path, temporary_dir)
+
+    assert normalized.pdf_path == temporary_dir / "answer.pdf"
+    assert normalized.pdf_path != source_path
+    assert captured["command"] == [
+        "libreoffice",
+        "--headless",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        str(temporary_dir),
+        str(source_path),
+    ]
+    assert captured["kwargs"] == {
+        "capture_output": True,
+        "check": False,
+        "text": True,
+        "timeout": 60,
+    }
+
+
+def test_normalize_docx_flags_unavailable_libreoffice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "answer.docx"
+    source_path.write_bytes(b"not-converted")
+    monkeypatch.setattr(documents.shutil, "which", lambda _name: None)
+
+    normalized = normalize_document(source_path, tmp_path / "run-temp")
+
+    assert normalized == NormalizationFailure(
+        source_path=source_path,
+        review_reason=DOCUMENT_CONVERSION_UNAVAILABLE,
+    )
+
+
+def test_normalize_docx_flags_failed_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_path = tmp_path / "answer.docx"
+    source_path.write_bytes(b"not-converted")
+    monkeypatch.setattr(documents.shutil, "which", lambda _name: "libreoffice")
+    monkeypatch.setattr(
+        documents.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, "", "failed"),
+    )
+
+    normalized = normalize_document(source_path, tmp_path / "run-temp")
+
+    assert normalized == NormalizationFailure(
+        source_path=source_path,
+        review_reason=DOCUMENT_CONVERSION_FAILED,
     )

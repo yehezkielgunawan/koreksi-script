@@ -1,8 +1,14 @@
 from dataclasses import dataclass
+from hashlib import sha256
 from html.parser import HTMLParser
 from pathlib import Path
 import re
+import shutil
+import subprocess
 from typing import Iterable
+
+import pdfplumber
+import pypdf
 
 
 STUDENT_ANSWER_PREFIX = "StudentAnswer"
@@ -20,6 +26,8 @@ NON_ANSWER_NAME_FRAGMENTS = frozenset(
 )
 MISSING_ANSWER_FILE = "missing_answer_file"
 AMBIGUOUS_ANSWER_FILES = "ambiguous_answer_files"
+DOCUMENT_CONVERSION_UNAVAILABLE = "document_conversion_unavailable"
+DOCUMENT_CONVERSION_FAILED = "document_conversion_failed"
 
 _STUDENT_FOLDER_PATTERN = re.compile(r"^(?P<id>\d+)_(?P<name>.+)$")
 _TEXT_BLOCK_TAGS = frozenset(
@@ -55,6 +63,30 @@ class SubmissionFiles:
     answer_path: Path | None
     question_path: Path | None
     review_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PageContent:
+    number: int
+    text: str
+    image_hashes: tuple[str, ...]
+    has_table: bool
+    has_drawings: bool
+
+
+@dataclass(frozen=True)
+class NormalizedDocument:
+    source_path: Path
+    pdf_path: Path
+    source_sha256: str
+    pdf_sha256: str
+    pages: tuple[PageContent, ...]
+
+
+@dataclass(frozen=True)
+class NormalizationFailure:
+    source_path: Path
+    review_reason: str
 
 
 class _BlockTextExtractor(HTMLParser):
@@ -162,6 +194,30 @@ def discover_submissions(assignment_roots: Iterable[Path]) -> list[SubmissionFil
     return submissions
 
 
+def normalize_document(
+    source_path: Path, temporary_dir: Path
+) -> NormalizedDocument | NormalizationFailure:
+    """Normalize a supported submission to PDF and collect page-level diagnostics."""
+    source_suffix = source_path.suffix.casefold()
+    if source_suffix == ".pdf":
+        pdf_path = source_path
+    elif source_suffix in {".doc", ".docx"}:
+        conversion_result = _convert_to_pdf(source_path, temporary_dir)
+        if isinstance(conversion_result, NormalizationFailure):
+            return conversion_result
+        pdf_path = conversion_result
+    else:
+        raise ValueError(f"Unsupported document type: {source_path.suffix}")
+
+    return NormalizedDocument(
+        source_path=source_path,
+        pdf_path=pdf_path,
+        source_sha256=_file_sha256(source_path),
+        pdf_sha256=_file_sha256(pdf_path),
+        pages=_page_content(pdf_path),
+    )
+
+
 def _is_assignment_root(path: Path) -> bool:
     return path.is_dir() and path.name.startswith(STUDENT_ANSWER_PREFIX)
 
@@ -188,3 +244,102 @@ def _student_documents(student_folder: Path) -> tuple[list[Path], Path | None]:
         answer_candidates.append(path)
 
     return answer_candidates, question_paths[0] if question_paths else None
+
+
+def _convert_to_pdf(source_path: Path, temporary_dir: Path) -> Path | NormalizationFailure:
+    libreoffice_path = shutil.which("libreoffice")
+    if libreoffice_path is None:
+        return NormalizationFailure(source_path, DOCUMENT_CONVERSION_UNAVAILABLE)
+
+    temporary_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        result = subprocess.run(
+            [
+                libreoffice_path,
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(temporary_dir),
+                str(source_path),
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return NormalizationFailure(source_path, DOCUMENT_CONVERSION_FAILED)
+
+    output_path = temporary_dir / f"{source_path.stem}.pdf"
+    if result.returncode != 0 or not output_path.is_file():
+        return NormalizationFailure(source_path, DOCUMENT_CONVERSION_FAILED)
+    return output_path
+
+
+def _file_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _page_content(pdf_path: Path) -> tuple[PageContent, ...]:
+    reader = pypdf.PdfReader(pdf_path)
+    with pdfplumber.open(pdf_path) as plumber_pdf:
+        if len(reader.pages) != len(plumber_pdf.pages):
+            raise ValueError(f"PDF page count mismatch while reading {pdf_path}")
+
+        return tuple(
+            PageContent(
+                number=index,
+                text=(reader_page.extract_text() or "").strip(),
+                image_hashes=_image_hashes(reader_page),
+                has_table=bool(plumber_page.find_tables()),
+                has_drawings=bool(
+                    plumber_page.lines or plumber_page.rects or plumber_page.curves
+                ),
+            )
+            for index, (reader_page, plumber_page) in enumerate(
+                zip(reader.pages, plumber_pdf.pages, strict=True), start=1
+            )
+        )
+
+
+def _image_hashes(page: pypdf.PageObject) -> tuple[str, ...]:
+    resources = page.get("/Resources")
+    if resources is None:
+        return ()
+    return tuple(_image_hashes_from_resources(resources.get_object(), set()))
+
+
+def _image_hashes_from_resources(resources: object, seen: set[int]) -> list[str]:
+    if not isinstance(resources, dict):
+        return []
+    xobjects = resources.get("/XObject")
+    if xobjects is None:
+        return []
+
+    hashes: list[str] = []
+    for reference in xobjects.get_object().values():
+        stream = reference.get_object()
+        stream_id = id(stream)
+        if stream_id in seen:
+            continue
+        seen.add(stream_id)
+
+        subtype = stream.get("/Subtype")
+        if subtype == "/Image":
+            raw_data = getattr(stream, "_data", None)
+            # pypdf does not expose raw stream bytes publicly for every stream type.
+            # Falling back to get_data still avoids PIL/image rendering.
+            data = raw_data if raw_data is not None else stream.get_data()
+            hashes.append(sha256(data).hexdigest())
+        elif subtype == "/Form":
+            nested_resources = stream.get("/Resources")
+            if nested_resources is not None:
+                hashes.extend(
+                    _image_hashes_from_resources(nested_resources.get_object(), seen)
+                )
+    return hashes

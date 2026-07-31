@@ -9,23 +9,35 @@ from grader_core.config import (
 )
 from grader_core.documents import (
     AMBIGUOUS_ANSWER_FILES,
+    DOCUMENT_CONVERSION_FAILED,
+    DOCUMENT_CONVERSION_UNAVAILABLE,
     MISSING_ANSWER_FILE,
+    NormalizationFailure,
+    NormalizedDocument,
+    PageContent,
     SubmissionFiles,
     discover_submissions,
     extract_html_blocks,
+    normalize_document,
 )
 
 __all__ = [
     "AssignmentConfig",
     "AMBIGUOUS_ANSWER_FILES",
     "CriterionConfig",
+    "DOCUMENT_CONVERSION_FAILED",
+    "DOCUMENT_CONVERSION_UNAVAILABLE",
     "ItemConfig",
     "MISSING_ANSWER_FILE",
+    "NormalizationFailure",
+    "NormalizedDocument",
     "RubricConfig",
     "RubricLoadError",
     "ScoreLevel",
+    "PageContent",
     "SubmissionFiles",
     "discover_submissions",
     "extract_html_blocks",
     "load_rubric",
+    "normalize_document",
 ]
