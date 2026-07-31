@@ -15,10 +15,14 @@ from grader_core.documents import (
     NormalizationFailure,
     NormalizedDocument,
     PageContent,
+    RenderedPage,
     SubmissionFiles,
+    chunk_visual_pages,
     discover_submissions,
     extract_html_blocks,
     normalize_document,
+    render_visual_pages,
+    select_visual_pages,
 )
 
 __all__ = [
@@ -35,9 +39,13 @@ __all__ = [
     "RubricLoadError",
     "ScoreLevel",
     "PageContent",
+    "RenderedPage",
     "SubmissionFiles",
     "discover_submissions",
     "extract_html_blocks",
     "load_rubric",
     "normalize_document",
+    "chunk_visual_pages",
+    "render_visual_pages",
+    "select_visual_pages",
 ]

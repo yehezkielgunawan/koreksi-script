@@ -1,14 +1,18 @@
 from dataclasses import dataclass
+from collections import Counter
 from hashlib import sha256
 from html.parser import HTMLParser
+import math
 from pathlib import Path
 import re
 import shutil
 import subprocess
 from typing import Iterable
 
+from PIL import Image
 import pdfplumber
 import pypdf
+import pypdfium2 as pdfium
 
 
 STUDENT_ANSWER_PREFIX = "StudentAnswer"
@@ -72,6 +76,7 @@ class PageContent:
     image_hashes: tuple[str, ...]
     has_table: bool
     has_drawings: bool
+    drawing_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -87,6 +92,14 @@ class NormalizedDocument:
 class NormalizationFailure:
     source_path: Path
     review_reason: str
+
+
+@dataclass(frozen=True)
+class RenderedPage:
+    page_number: int
+    path: Path
+    width: int
+    height: int
 
 
 class _BlockTextExtractor(HTMLParser):
@@ -218,6 +231,136 @@ def normalize_document(
     )
 
 
+def select_visual_pages(
+    document: NormalizedDocument,
+    *,
+    min_text_chars: int = 200,
+    max_drawing_count: int = 10,
+    template_fraction: float = 0.5,
+) -> tuple[int, ...]:
+    """Select pages whose layout or visual content may affect grading."""
+    if min_text_chars < 0:
+        raise ValueError("min_text_chars must be non-negative")
+    if max_drawing_count < 0:
+        raise ValueError("max_drawing_count must be non-negative")
+    if not 0 < template_fraction <= 1:
+        raise ValueError("template_fraction must be greater than 0 and at most 1")
+
+    page_count = len(document.pages)
+    repeated_threshold = math.ceil(page_count * template_fraction)
+    image_occurrences = Counter(
+        image_hash
+        for page in document.pages
+        for image_hash in page.image_hashes
+    )
+    repeated_templates = {
+        image_hash
+        for image_hash, count in image_occurrences.items()
+        if count >= repeated_threshold
+    }
+
+    selected: list[int] = []
+    for page in document.pages:
+        text_length = len(" ".join(page.text.split()))
+        has_unique_image = any(
+            image_hash not in repeated_templates for image_hash in page.image_hashes
+        )
+        if (
+            text_length < min_text_chars
+            or page.has_table
+            or page.drawing_count > max_drawing_count
+            or has_unique_image
+        ):
+            selected.append(page.number)
+    return tuple(selected)
+
+
+def chunk_visual_pages(
+    page_numbers: Iterable[int], *, max_images: int = 8
+) -> tuple[tuple[int, ...], ...]:
+    """Split 1-indexed page numbers into bounded image-request chunks."""
+    if max_images <= 0:
+        raise ValueError("max_images must be positive")
+    pages = tuple(page_numbers)
+    if any(page_number < 1 for page_number in pages):
+        raise ValueError("page numbers must be positive and 1-indexed")
+    return tuple(
+        pages[start : start + max_images]
+        for start in range(0, len(pages), max_images)
+    )
+
+
+def render_visual_pages(
+    pdf_path: Path,
+    page_numbers: Iterable[int],
+    output_dir: Path,
+    *,
+    scale: float = 2.0,
+    max_pixels: int = 2_000_000,
+) -> tuple[RenderedPage, ...]:
+    """Render selected 1-indexed PDF pages as bounded RGB PNG files."""
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    if max_pixels <= 0:
+        raise ValueError("max_pixels must be positive")
+
+    pages = tuple(page_numbers)
+    if any(page_number < 1 for page_number in pages):
+        raise ValueError("page numbers must be positive and 1-indexed")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rendered_pages: list[RenderedPage] = []
+    with pdfium.PdfDocument(pdf_path) as pdf:
+        page_count = len(pdf)
+        if any(page_number > page_count for page_number in pages):
+            raise ValueError(f"page number exceeds PDF page count {page_count}")
+
+        for page_number in pages:
+            page = pdf[page_number - 1]
+            try:
+                page_width, page_height = page.get_size()
+                requested_pixels = (
+                    page_width * scale * page_height * scale
+                )
+                effective_scale = scale
+                if requested_pixels > max_pixels:
+                    effective_scale *= math.sqrt(max_pixels / requested_pixels)
+
+                bitmap = page.render(
+                    scale=effective_scale,
+                    fill_color=(255, 255, 255, 255),
+                    maybe_alpha=False,
+                )
+                try:
+                    image = bitmap.to_pil().convert("RGB")
+                    if image.width * image.height > max_pixels:
+                        resize_scale = math.sqrt(
+                            max_pixels / (image.width * image.height)
+                        )
+                        image = image.resize(
+                            (
+                                max(1, math.floor(image.width * resize_scale)),
+                                max(1, math.floor(image.height * resize_scale)),
+                            ),
+                            Image.Resampling.LANCZOS,
+                        )
+                    output_path = output_dir / f"page-{page_number:04d}.png"
+                    image.save(output_path, format="PNG", optimize=True)
+                    rendered_pages.append(
+                        RenderedPage(
+                            page_number=page_number,
+                            path=output_path,
+                            width=image.width,
+                            height=image.height,
+                        )
+                    )
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
+    return tuple(rendered_pages)
+
+
 def _is_assignment_root(path: Path) -> bool:
     return path.is_dir() and path.name.startswith(STUDENT_ANSWER_PREFIX)
 
@@ -297,14 +440,20 @@ def _page_content(pdf_path: Path) -> tuple[PageContent, ...]:
                 text=(reader_page.extract_text() or "").strip(),
                 image_hashes=_image_hashes(reader_page),
                 has_table=bool(plumber_page.find_tables()),
-                has_drawings=bool(
-                    plumber_page.lines or plumber_page.rects or plumber_page.curves
-                ),
+                has_drawings=(drawing_count := _drawing_count(plumber_page)) > 0,
+                drawing_count=drawing_count,
             )
             for index, (reader_page, plumber_page) in enumerate(
                 zip(reader.pages, plumber_pdf.pages, strict=True), start=1
             )
         )
+
+
+def _drawing_count(page: object) -> int:
+    return sum(
+        len(getattr(page, attribute, ()) or ())
+        for attribute in ("lines", "rects", "curves")
+    )
 
 
 def _image_hashes(page: pypdf.PageObject) -> tuple[str, ...]:

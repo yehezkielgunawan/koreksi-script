@@ -4,6 +4,7 @@ import shutil
 import subprocess
 
 from docx import Document
+from PIL import Image
 from pypdf import PdfReader, PdfWriter
 import pytest
 
@@ -17,10 +18,15 @@ from grader_core.documents import (
     DOCUMENT_CONVERSION_UNAVAILABLE,
     MISSING_ANSWER_FILE,
     NormalizationFailure,
+    NormalizedDocument,
+    PageContent,
     SubmissionFiles,
+    chunk_visual_pages,
     discover_submissions,
     extract_html_blocks,
     normalize_document,
+    render_visual_pages,
+    select_visual_pages,
 )
 
 
@@ -206,3 +212,92 @@ def test_normalize_docx_flags_failed_conversion(
         source_path=source_path,
         review_reason=DOCUMENT_CONVERSION_FAILED,
     )
+
+
+def test_repeated_template_image_does_not_select_every_text_page(
+    tmp_path: Path,
+) -> None:
+    document = NormalizedDocument(
+        source_path=tmp_path / "answer.pdf",
+        pdf_path=tmp_path / "answer.pdf",
+        source_sha256="source",
+        pdf_sha256="pdf",
+        pages=tuple(
+            PageContent(
+                number=page_number,
+                text="A sufficiently complete answer " * 10,
+                image_hashes=("repeated-logo",),
+                has_table=False,
+                has_drawings=False,
+            )
+            for page_number in range(1, 4)
+        ),
+    )
+
+    assert select_visual_pages(document, min_text_chars=100) == ()
+
+
+def test_unique_diagram_and_image_only_pages_are_selected(tmp_path: Path) -> None:
+    document = NormalizedDocument(
+        source_path=tmp_path / "answer.pdf",
+        pdf_path=tmp_path / "answer.pdf",
+        source_sha256="source",
+        pdf_sha256="pdf",
+        pages=(
+            PageContent(1, "Complete answer " * 20, ("logo",), False, False),
+            PageContent(2, "Complete answer " * 20, ("logo",), False, False),
+            PageContent(3, "Complete answer " * 20, ("diagram",), False, False),
+            PageContent(4, "", ("answer-image",), False, False),
+        ),
+    )
+
+    assert select_visual_pages(document, min_text_chars=100) == (3, 4)
+
+
+def test_table_and_excessive_drawing_pages_are_selected(tmp_path: Path) -> None:
+    document = NormalizedDocument(
+        source_path=tmp_path / "answer.pdf",
+        pdf_path=tmp_path / "answer.pdf",
+        source_sha256="source",
+        pdf_sha256="pdf",
+        pages=(
+            PageContent(1, "Complete answer " * 20, (), True, False),
+            PageContent(2, "Complete answer " * 20, (), False, True, 11),
+            PageContent(3, "Complete answer " * 20, (), False, True, 2),
+        ),
+    )
+
+    assert select_visual_pages(document, min_text_chars=100, max_drawing_count=10) == (
+        1,
+        2,
+    )
+
+
+def test_visual_pages_are_chunked_by_eight() -> None:
+    assert chunk_visual_pages(range(1, 18)) == (
+        tuple(range(1, 9)),
+        tuple(range(9, 17)),
+        (17,),
+    )
+
+
+def test_render_visual_pages_writes_bounded_pngs(
+    tmp_path: Path, synthetic_pdf_files: dict[str, Path]
+) -> None:
+    rendered = render_visual_pages(
+        synthetic_pdf_files["text"],
+        (1,),
+        tmp_path / "rendered",
+        scale=2.0,
+        max_pixels=50_000,
+    )
+
+    assert len(rendered) == 1
+    assert rendered[0].page_number == 1
+    assert rendered[0].path.name == "page-0001.png"
+    assert rendered[0].path.is_file()
+    with Image.open(rendered[0].path) as image:
+        assert image.format == "PNG"
+        assert image.width * image.height <= 50_000
+        assert image.width > 0
+        assert image.height > 0
