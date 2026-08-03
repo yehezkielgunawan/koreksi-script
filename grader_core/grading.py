@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -61,6 +62,21 @@ class GradingValidationError(ValueError):
     """Raised when a model response cannot be reconciled with a rubric."""
 
 
+class GradeCalculationError(ValueError):
+    """Raised when a validated response cannot produce a complete grade."""
+
+
+@dataclass(frozen=True)
+class CalculatedGrade:
+    criterion_scores: dict[str, int]
+    item_scores: dict[str, int]
+    item_percentages: dict[str, float]
+    total_score: int
+    weakest_item_id: str
+    feedback: str
+    review_reasons: tuple[str, ...]
+
+
 def validate_visual_evidence(
     response: VisualEvidenceResponse, page_count: int
 ) -> None:
@@ -74,7 +90,7 @@ def validate_visual_evidence(
 
 
 def validate_grading_response(
-    response: GradingResponse, rubric: RubricConfig, page_count: int
+    response: GradingResponse, rubric: RubricConfig, page_count: int | None = None
 ) -> None:
     expected = {
         (item.id, criterion.id): criterion
@@ -109,7 +125,7 @@ def validate_grading_response(
             )
 
         for citation in assessment.evidence:
-            if citation.page > page_count:
+            if page_count is not None and citation.page > page_count:
                 errors.append(
                     f"{key[0]}/{key[1]} references page {citation.page}, "
                     f"but document has {page_count} pages"
@@ -123,6 +139,67 @@ def validate_grading_response(
 
     if errors:
         raise GradingValidationError("; ".join(errors))
+
+
+def calculate_grade(
+    response: GradingResponse, rubric: RubricConfig
+) -> CalculatedGrade:
+    """Calculate totals and feedback selection without trusting model arithmetic."""
+    validate_grading_response(response, rubric)
+
+    assessments = {
+        (assessment.item_id, assessment.criterion_id): assessment
+        for assessment in response.assessments
+    }
+    criterion_scores = {
+        criterion.id: assessments[(item.id, criterion.id)].selected_score
+        for item in rubric.items
+        for criterion in item.criteria
+    }
+    item_scores = {
+        item.id: sum(
+            assessments[(item.id, criterion.id)].selected_score
+            for criterion in item.criteria
+        )
+        for item in rubric.items
+    }
+    item_percentages = {
+        item.id: item_scores[item.id] / item.max_points for item in rubric.items
+    }
+
+    missing_feedback = [
+        item.id for item in rubric.items if item.id not in response.item_feedback
+    ]
+    if missing_feedback:
+        raise GradeCalculationError(
+            "missing item feedback for: " + ", ".join(missing_feedback)
+        )
+
+    weakest_item_id = min(item_percentages, key=item_percentages.__getitem__)
+    total_score = sum(item_scores.values())
+    if total_score >= rubric.assignment.overall_feedback_below:
+        feedback = response.item_feedback[weakest_item_id]
+    else:
+        feedback = response.overall_feedback
+
+    review_reasons = list(response.review_reasons)
+    for item in rubric.items:
+        for criterion in item.criteria:
+            assessment = assessments[(item.id, criterion.id)]
+            if assessment.readability == "unreadable":
+                reason = f"unreadable_evidence:{item.id}/{criterion.id}"
+                if reason not in review_reasons:
+                    review_reasons.append(reason)
+
+    return CalculatedGrade(
+        criterion_scores=criterion_scores,
+        item_scores=item_scores,
+        item_percentages=item_percentages,
+        total_score=total_score,
+        weakest_item_id=weakest_item_id,
+        feedback=feedback,
+        review_reasons=tuple(review_reasons),
+    )
 
 
 def visual_evidence_schema() -> dict:

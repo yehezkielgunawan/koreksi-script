@@ -9,12 +9,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from grader_core.config import RubricConfig
 from grader_core.grading import (
+    CalculatedGrade,
     CriterionAssessment,
     EvidenceCitation,
+    GradeCalculationError,
     GradingResponse,
     GradingValidationError,
     VisualEvidenceItem,
     VisualEvidenceResponse,
+    calculate_grade,
     validate_grading_response,
 )
 
@@ -219,3 +222,116 @@ def test_prompt_files_contain_versioned_untrusted_content_rules() -> None:
     assert "ignore" in grading_prompt.lower()
     assert "Bahasa Indonesia" in grading_prompt
     assert "page" in grading_prompt.lower()
+
+
+def _weighted_rubric() -> RubricConfig:
+    items = [
+        ("question_1", "Question 1", 25, "criterion_1", 25, 22),
+        ("question_2", "Question 2", 35, "criterion_2", 35, 29),
+        ("question_3", "Question 3", 40, "criterion_3", 40, 34),
+    ]
+    return RubricConfig.model_validate(
+        {
+            "schema_version": 1,
+            "assignment": {
+                "id": "weighted-assignment",
+                "title": "Weighted assignment",
+                "total_points": 100,
+                "feedback_language": "id",
+                "overall_feedback_below": 80,
+            },
+            "items": [
+                {
+                    "id": item_id,
+                    "label": label,
+                    "max_points": item_max,
+                    "criteria": [
+                        {
+                            "id": criterion_id,
+                            "description": label,
+                            "max_points": criterion_max,
+                            "required_evidence": "A page citation",
+                            "levels": [
+                                {"score": 0, "description": "Missing"},
+                                {"score": passing_score, "description": "Good"},
+                                {"score": criterion_max, "description": "Complete"},
+                            ],
+                        }
+                    ],
+                }
+                for item_id, label, item_max, criterion_id, criterion_max, passing_score in items
+            ],
+        }
+    )
+
+
+def _weighted_response(
+    scores: tuple[int, int, int],
+    *,
+    readability: tuple[str, str, str] = ("clear", "clear", "clear"),
+) -> GradingResponse:
+    return GradingResponse(
+        assessments=[
+            CriterionAssessment(
+                item_id=f"question_{index}",
+                criterion_id=f"criterion_{index}",
+                selected_score=score,
+                rationale="Evidence supports this criterion.",
+                evidence=(
+                    []
+                    if score == 0
+                    else [EvidenceCitation(page=index, quote="Supporting answer")]
+                ),
+                readability=readability[index - 1],
+            )
+            for index, score in enumerate(scores, start=1)
+        ],
+        item_feedback={
+            "question_1": "Feedback question 1.",
+            "question_2": "Feedback question 2.",
+            "question_3": "Feedback question 3.",
+        },
+        overall_feedback="Overall feedback.",
+    )
+
+
+def test_calculate_grade_uses_percentage_for_weakest_item() -> None:
+    grade = calculate_grade(_weighted_response((22, 29, 34)), _weighted_rubric())
+
+    assert isinstance(grade, CalculatedGrade)
+    assert grade.criterion_scores == {
+        "criterion_1": 22,
+        "criterion_2": 29,
+        "criterion_3": 34,
+    }
+    assert grade.item_scores == {"question_1": 22, "question_2": 29, "question_3": 34}
+    assert grade.total_score == 85
+    assert grade.weakest_item_id == "question_2"
+    assert grade.feedback == "Feedback question 2."
+
+
+def test_calculate_grade_uses_overall_feedback_below_threshold() -> None:
+    grade = calculate_grade(_weighted_response((0, 29, 34)), _weighted_rubric())
+
+    assert grade.total_score == 63
+    assert grade.feedback == "Overall feedback."
+
+
+def test_calculate_grade_flags_unreadable_required_evidence() -> None:
+    grade = calculate_grade(
+        _weighted_response(
+            (0, 29, 34),
+            readability=("unreadable", "clear", "clear"),
+        ),
+        _weighted_rubric(),
+    )
+
+    assert "unreadable_evidence:question_1/criterion_1" in grade.review_reasons
+
+
+def test_calculate_grade_rejects_missing_item_feedback() -> None:
+    response = _weighted_response((22, 29, 34))
+    response.item_feedback.pop("question_2")
+
+    with pytest.raises(GradeCalculationError, match="question_2"):
+        calculate_grade(response, _weighted_rubric())
