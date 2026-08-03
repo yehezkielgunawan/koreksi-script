@@ -40,31 +40,19 @@ Only one supported answer document is accepted per student. Files whose names co
 
 ## Rubrics
 
-Rubrics are strict shared YAML templates validated with Pydantic. The repository includes:
+Rubrics are strict combined YAML catalogs validated with Pydantic. The repository includes:
 
-- `rubrics/individual.yaml` for reusable individual-answer criteria.
-- `rubrics/group.yaml` for reusable group-paper criteria.
+- `rubrics/individual.yaml` for all individual assignment rubrics.
+- `rubrics/group.yaml` for all group assignment rubrics.
 
-Each `StudentAnswer*` directory must include an `assignment.yaml` manifest. The manifest declares the weekly question IDs, labels, and point weights. Its question points must sum exactly to `100`; the model never decides the point structure.
+Each `StudentAnswer*` directory must include an `assignment.yaml` selector. The selector chooses an assignment entry from the selected catalog; the catalog owns every question's points, criteria, required evidence, and score levels.
 
-Example manifest:
+Example selector:
 
 ```yaml
 schema_version: 1
 assignment:
   id: week-04
-  title: Weekly Assignment 4
-  total_points: 100
-questions:
-  - id: question_1
-    label: Question 1
-    max_points: 20
-  - id: question_2
-    label: Question 2
-    max_points: 30
-  - id: question_3
-    label: Question 3
-    max_points: 50
 ```
 
 Validate a rubric before grading:
@@ -109,7 +97,7 @@ The `--model`, `--visual-prompt`, and `--grading-prompt` options can override th
 
 ## Results and Review
 
-The default result file is `results_v3.json`. Results use schema version 3 and contain a fingerprint covering the source document, normalized PDF, question, shared rubric, weekly manifest, prompts, model, extractor, and schema version. Existing results are reused only when the complete fingerprint matches.
+The default result file is `results_v3.json`. Results use schema version 3 and contain a fingerprint covering the source document, normalized PDF, question, selected catalog assignment, selector, prompts, model, extractor, and schema version. Existing results are reused only when the complete fingerprint matches.
 
 Each record has one of these statuses:
 
@@ -127,7 +115,7 @@ Retired output filenames are rejected to prevent accidental mixing of incompatib
 
 - `OPENROUTER_API_KEY is required`: set the key in `.env` or the shell environment.
 - `LibreOffice is required`: install LibreOffice before grading DOC or DOCX files; PDF-only dry runs do not require it.
-- `assignment manifest not found`: add a strict `assignment.yaml` to the `StudentAnswer*` root or the affected student folder.
+- `assignment selector not found`: add a strict `assignment.yaml` with an assignment ID to the `StudentAnswer*` root or affected student folder.
 - `no student submissions found`: check that the input contains directories beginning with `StudentAnswer` and student folders with supported documents.
 - A `needs_review` record is intentional. Inspect the separate review queue instead of treating it as an automatic pass or failure.
 

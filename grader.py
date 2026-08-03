@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
+import json
 import os
 from pathlib import Path
 import re
@@ -15,7 +16,7 @@ from dotenv import load_dotenv
 
 from grader_core import (
     DEFAULT_MODEL,
-    AssignmentManifest,
+    AssignmentSelector,
     EvidencePackage,
     NormalizationFailure,
     QuestionMappingError,
@@ -25,20 +26,20 @@ from grader_core import (
     ResultStore,
     SubmissionFiles,
     build_fingerprint,
-    build_effective_rubric,
     calculate_grade,
     chunk_visual_pages,
     discover_submissions,
     extract_question_sections,
-    load_assignment_manifest,
-    load_rubric_template,
+    load_assignment_selector,
+    load_rubric_catalog,
+    select_catalog_assignment,
     normalize_document,
     render_visual_pages,
     select_visual_pages,
     validate_grading_response,
     validate_visual_evidence,
 )
-from grader_core.config import RubricConfig, RubricLoadError, RubricTemplate
+from grader_core.config import RubricCatalog, RubricConfig, RubricLoadError
 from grader_core.documents import NormalizedDocument
 from grader_core.openrouter import OpenRouterClient
 
@@ -54,8 +55,8 @@ PROMPT_VERSION_PATTERN = re.compile(r"prompt_version:\s*([^\s>-]+)", re.IGNORECA
 @dataclass(frozen=True)
 class SubmissionContext:
     submission: SubmissionFiles
-    manifest: AssignmentManifest
-    manifest_path: Path
+    selector: AssignmentSelector
+    selector_path: Path
     rubric: RubricConfig
 
 
@@ -68,7 +69,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _validate_rubric(Path(args.rubric))
 
     try:
-        template, contexts = _preflight(args)
+        catalog, contexts = _preflight(args)
     except (OSError, RubricLoadError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
@@ -87,10 +88,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
     if args.dry_run:
-        return _run_dry_run(args, template, contexts)
+        return _run_dry_run(args, catalog, contexts)
 
     try:
-        return _run_grading(args, template, contexts)
+        return _run_grading(args, catalog, contexts)
     except (OSError, RubricLoadError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -134,21 +135,21 @@ def _add_grading_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _validate_rubric(path: Path) -> int:
     try:
-        template = load_rubric_template(path)
+        catalog = load_rubric_catalog(path)
     except (OSError, RubricLoadError, ValueError) as exc:
         print(f"Invalid rubric: {exc}", file=sys.stderr)
         return 2
 
     print(
-        f"Rubric valid: {template.rubric.id} "
-        f"({len(template.criteria)} shared criteria, 100-point template)"
+        f"Rubric valid: {catalog.rubric.id} "
+        f"({len(catalog.assignments)} assignment(s), 100-point entries)"
     )
     return 0
 
 
 def _preflight(
     args: argparse.Namespace,
-) -> tuple[RubricTemplate, list[SubmissionContext]]:
+) -> tuple[RubricCatalog, list[SubmissionContext]]:
     output_path = Path(args.output)
     if output_path.name in LEGACY_OUTPUT_NAMES:
         raise ValueError(
@@ -156,7 +157,7 @@ def _preflight(
             "use results_v3.json or another versioned output"
         )
 
-    template = load_rubric_template(Path(args.rubric))
+    catalog = load_rubric_catalog(Path(args.rubric))
     input_root = Path(args.input_root)
     assignment_roots = _assignment_roots(input_root)
     submissions = discover_submissions(assignment_roots)
@@ -177,26 +178,26 @@ def _preflight(
     _check_prompt(Path(args.visual_prompt), "visual prompt")
     _check_prompt(Path(args.grading_prompt), "grading prompt")
 
-    manifest_cache: dict[Path, AssignmentManifest] = {}
+    selector_cache: dict[Path, AssignmentSelector] = {}
     contexts: list[SubmissionContext] = []
     for submission in submissions:
-        manifest_path = _manifest_path(submission)
-        if manifest_path is None:
+        selector_path = _selector_path(submission)
+        if selector_path is None:
             raise RubricLoadError(
-                "assignment manifest not found for "
+                "assignment selector not found for "
                 f"{submission.folder}; expected assignment.yaml in the student "
                 "folder or StudentAnswer* root"
             )
-        manifest = manifest_cache.get(manifest_path)
-        if manifest is None:
-            manifest = load_assignment_manifest(manifest_path)
-            manifest_cache[manifest_path] = manifest
+        selector = selector_cache.get(selector_path)
+        if selector is None:
+            selector = load_assignment_selector(selector_path)
+            selector_cache[selector_path] = selector
         contexts.append(
             SubmissionContext(
                 submission=submission,
-                manifest=manifest,
-                manifest_path=manifest_path,
-                rubric=build_effective_rubric(template, manifest),
+                selector=selector,
+                selector_path=selector_path,
+                rubric=select_catalog_assignment(catalog, selector.assignment.id),
             )
         )
 
@@ -220,10 +221,10 @@ def _preflight(
     if not args.dry_run and not os.getenv("OPENROUTER_API_KEY"):
         raise ValueError("OPENROUTER_API_KEY is required for grading")
 
-    return template, contexts
+    return catalog, contexts
 
 
-def _manifest_path(submission: SubmissionFiles) -> Path | None:
+def _selector_path(submission: SubmissionFiles) -> Path | None:
     for path in (
         submission.folder / "assignment.yaml",
         submission.assignment_root / "assignment.yaml",
@@ -272,7 +273,7 @@ def _check_prompt(path: Path, label: str) -> None:
 
 def _run_dry_run(
     args: argparse.Namespace,
-    template: RubricTemplate,
+    catalog: RubricCatalog,
     contexts: Sequence[SubmissionContext],
 ) -> int:
     normalized_count = 0
@@ -331,7 +332,7 @@ def _run_dry_run(
         f"{normalized_count} normalized, {review_count} review item(s)."
     )
     print(
-        f"Rubric: {template.rubric.id}; no API requests were made and "
+        f"Rubric: {catalog.rubric.id}; no API requests were made and "
         f"no result file was written."
     )
     return 0
@@ -339,7 +340,7 @@ def _run_dry_run(
 
 def _run_grading(
     args: argparse.Namespace,
-    template: RubricTemplate,
+    catalog: RubricCatalog,
     contexts: Sequence[SubmissionContext],
 ) -> int:
     output_path = Path(args.output)
@@ -360,8 +361,8 @@ def _run_grading(
         submission = context.submission
         source_path = submission.answer_path or submission.folder
         file_path = str(source_path)
-        rubric_sha256 = _combined_file_sha256(
-            Path(args.rubric), context.manifest_path
+        rubric_sha256 = _selected_rubric_sha256(
+            context.rubric, context.selector.assignment.id
         )
         fingerprint = _build_submission_fingerprint(
             submission,
@@ -522,7 +523,7 @@ def _question_sections(context: SubmissionContext) -> tuple[QuestionSection, ...
     try:
         return extract_question_sections(
             submission.question_path.read_text(encoding="utf-8"),
-            context.manifest.questions,
+            context.rubric.items,
         )
     except (OSError, UnicodeDecodeError) as exc:
         raise QuestionMappingError(
@@ -602,12 +603,17 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _combined_file_sha256(*paths: Path) -> str:
-    digest = sha256()
-    for path in paths:
-        digest.update(_file_sha256(path).encode("ascii"))
-        digest.update(b"\0")
-    return digest.hexdigest()
+def _selected_rubric_sha256(rubric: RubricConfig, assignment_id: str) -> str:
+    canonical = json.dumps(
+        {
+            "assignment_id": assignment_id,
+            "rubric": rubric.model_dump(mode="json"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _text_sha256(canonical)
 
 
 def _text_sha256(value: str) -> str:

@@ -19,41 +19,82 @@ from grader_core.results import ResultsDocument
 
 
 VALID_RUBRIC = """\
-schema_version: 2
+schema_version: 3
 rubric:
   id: cli-test
   feedback_language: id
   overall_feedback_below: 80
-criteria:
-  - id: criterion_1
-    weight: 1.0
-    description: Explains the answer
-    required_evidence: A clear explanation
-    levels:
-      - fraction: 0.0
-        description: Missing
-      - fraction: 0.5
-        description: Partial
-      - fraction: 1.0
-        description: Complete
+assignments:
+  - id: week-01
+    title: Week 1
+    total_points: 100
+    questions:
+      - id: question_1
+        label: Question 1
+        max_points: 100
+        criteria:
+          - id: criterion_1
+            description: Explains the answer
+            max_points: 100
+            required_evidence: A clear explanation
+            levels:
+              - score: 0
+                description: Missing
+              - score: 50
+                description: Partial
+              - score: 100
+                description: Complete
 """
 
 VALID_MANIFEST = """\
 schema_version: 1
 assignment:
   id: week-01
-  title: Week 1
-  total_points: 100
-questions:
-  - id: question_1
-    label: Question 1
-    max_points: 100
+"""
+
+DYNAMIC_RUBRIC = """\
+schema_version: 3
+rubric:
+  id: cli-dynamic
+  feedback_language: id
+  overall_feedback_below: 80
+assignments:
+  - id: week-dynamic
+    title: Dynamic Week
+    total_points: 100
+    questions:
+      - id: question_1
+        label: Question 1
+        max_points: 40
+        criteria:
+          - id: first_specific_criterion
+            description: First question criterion
+            max_points: 40
+            required_evidence: First evidence
+            levels:
+              - score: 0
+                description: Missing
+              - score: 40
+                description: Complete
+      - id: question_2
+        label: Question 2
+        max_points: 60
+        criteria:
+          - id: second_specific_criterion
+            description: Second question criterion
+            max_points: 60
+            required_evidence: Second evidence
+            levels:
+              - score: 0
+                description: Missing
+              - score: 60
+                description: Complete
 """
 
 
-def _write_rubric(tmp_path: Path) -> Path:
+def _write_catalog(tmp_path: Path, content: str = VALID_RUBRIC) -> Path:
     path = tmp_path / "rubric.yaml"
-    path.write_text(VALID_RUBRIC, encoding="utf-8")
+    path.write_text(content, encoding="utf-8")
     return path
 
 
@@ -66,7 +107,7 @@ def _write_manifest(assignment_root: Path, content: str = VALID_MANIFEST) -> Pat
 def test_validate_command_accepts_valid_rubric(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    rubric_path = _write_rubric(tmp_path)
+    rubric_path = _write_catalog(tmp_path)
 
     exit_code = main(["validate", "--rubric", str(rubric_path)])
 
@@ -80,7 +121,7 @@ def test_grade_dry_run_discovers_and_normalizes_without_api_client(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    rubric_path = _write_rubric(tmp_path)
+    rubric_path = _write_catalog(tmp_path)
     assignment_root = tmp_path / "StudentAnswer_CLI"
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
@@ -118,7 +159,7 @@ def test_grade_writes_a_versioned_result_without_network_access(
     synthetic_pdf_files: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rubric_path = _write_rubric(tmp_path)
+    rubric_path = _write_catalog(tmp_path)
     assignment_root = tmp_path / "StudentAnswer_CLI"
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
@@ -154,7 +195,7 @@ def test_grade_writes_a_versioned_result_without_network_access(
                 assessments=[
                     CriterionAssessment(
                         item_id="question_1",
-                        criterion_id="question_1__criterion_1",
+                        criterion_id="criterion_1",
                         selected_score=100,
                         rationale="Jawaban didukung bukti.",
                         evidence=[EvidenceCitation(page=1, quote="Jawaban normal")],
@@ -194,18 +235,14 @@ def test_grade_dry_run_uses_dynamic_manifest_questions(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    rubric_path = _write_rubric(tmp_path)
+    rubric_path = _write_catalog(tmp_path, DYNAMIC_RUBRIC)
     assignment_root = tmp_path / "StudentAnswer_DYNAMIC"
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
     shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
     _write_manifest(
         assignment_root,
-        VALID_MANIFEST.replace(
-            "  - id: question_1\n    label: Question 1\n    max_points: 100",
-            "  - id: question_1\n    label: Question 1\n    max_points: 40\n"
-            "  - id: question_2\n    label: Question 2\n    max_points: 60",
-        ),
+        VALID_MANIFEST.replace("week-01", "week-dynamic"),
     )
     (assignment_root / "Question.html").write_text(
         "<h2>Question 1</h2><p>First statement.</p>"
@@ -243,7 +280,7 @@ def test_grade_requires_assignment_manifest_before_api(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    rubric_path = _write_rubric(tmp_path)
+    rubric_path = _write_catalog(tmp_path)
     assignment_root = tmp_path / "StudentAnswer_NO_MANIFEST"
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
@@ -266,13 +303,13 @@ def test_grade_requires_assignment_manifest_before_api(
     )
 
     assert exit_code == 2
-    assert "assignment manifest" in capsys.readouterr().err.lower()
+    assert "assignment selector" in capsys.readouterr().err.lower()
 
 
 def test_grade_rejects_legacy_output_paths(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    rubric_path = _write_rubric(tmp_path)
+    rubric_path = _write_catalog(tmp_path)
     assignment_root = tmp_path / "StudentAnswer_CLI"
     assignment_root.mkdir()
 

@@ -28,7 +28,7 @@ uv run grader.py grade --rubric rubrics/individual.yaml --input /path/to/submiss
 uv run grader.py regrade --student-id <ID> --rubric rubrics/individual.yaml --input /path/to/submissions --output results_v3.json
 ```
 
-Dry runs perform discovery, weekly-manifest validation, document conversion, question mapping, and page rendering without initializing the API client or writing results. `regrade` bypasses the exact fingerprint cache for one student.
+Dry runs perform discovery, assignment-selector and catalog validation, document conversion, question mapping, and page rendering without initializing the API client or writing results. `regrade` bypasses the exact fingerprint cache for one student.
 
 ## Environment
 
@@ -40,7 +40,8 @@ Dry runs perform discovery, weekly-manifest validation, document conversion, que
 
 ## Key Behavior
 
-- Shared rubrics are strict YAML templates; each `StudentAnswer*` root also requires an `assignment.yaml` manifest whose question points sum to 100.
+- Rubrics are strict combined YAML catalogs; each selected assignment defines every question's points, criteria, required evidence, and score levels.
+- Each `StudentAnswer*` root requires an `assignment.yaml` selector whose ID exists in the selected catalog.
 - Question statements come from a student-level `Question.html` or the assignment-root fallback. Ambiguous mappings require review.
 - The model returns evidence and criterion assessments; Python calculates totals and selects the weakest item.
 - Results are saved atomically after each submission and skipped only when the complete fingerprint matches.
