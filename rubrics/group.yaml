@@ -1,0 +1,56 @@
+schema_version: 1
+assignment:
+  id: group-paper-background
+  title: Group Paper Draft - Latar Belakang
+  total_points: 100
+  feedback_language: id
+  overall_feedback_below: 80
+items:
+  - id: background_section
+    label: Latar Belakang
+    max_points: 100
+    criteria:
+      - id: background_context
+        description: Kejelasan konteks dan latar masalah yang diperkenalkan.
+        max_points: 25
+        required_evidence: Deskripsi konteks, kondisi awal, dan ruang lingkup masalah.
+        levels:
+          - score: 0
+            description: Konteks tidak ada atau tidak berkaitan dengan topik.
+          - score: 12
+            description: Konteks dasar tersedia tetapi masih umum atau kurang lengkap.
+          - score: 25
+            description: Konteks spesifik, lengkap, dan langsung mengarahkan pembaca pada masalah.
+      - id: background_problem
+        description: Ketajaman perumusan masalah dan urgensinya.
+        max_points: 25
+        required_evidence: Pernyataan masalah, dampak, dan alasan mengapa masalah perlu dibahas.
+        levels:
+          - score: 0
+            description: Masalah tidak dirumuskan atau tidak didukung argumen.
+          - score: 12
+            description: Masalah dirumuskan tetapi urgensi atau dampaknya belum jelas.
+          - score: 25
+            description: Masalah dan urgensinya dirumuskan secara spesifik dan meyakinkan.
+      - id: background_evidence
+        description: Relevansi dan kecukupan data, sumber, atau contoh pendukung.
+        max_points: 25
+        required_evidence: Data, referensi, contoh, atau fakta yang mendukung klaim utama.
+        levels:
+          - score: 0
+            description: Tidak ada bukti pendukung atau bukti tidak relevan.
+          - score: 12
+            description: Bukti pendukung ada tetapi terbatas, umum, atau belum terhubung dengan klaim.
+          - score: 25
+            description: Bukti relevan dan cukup untuk mendukung klaim utama secara meyakinkan.
+      - id: background_coherence
+        description: Koherensi alur argumentasi dari konteks menuju tujuan atau arah paper.
+        max_points: 25
+        required_evidence: Transisi logis, hubungan antarparagraf, dan tujuan pembahasan.
+        levels:
+          - score: 0
+            description: Alur argumentasi tidak koheren atau tidak mengarah pada tujuan paper.
+          - score: 12
+            description: Alur dapat diikuti tetapi masih ada lompatan logika atau bagian berulang.
+          - score: 25
+            description: Alur logis, konsisten, dan mengantar pembaca dengan jelas ke tujuan paper.

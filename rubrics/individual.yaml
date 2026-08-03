@@ -1,0 +1,143 @@
+schema_version: 1
+assignment:
+  id: individual-essay
+  title: Individual College Student Essay
+  total_points: 100
+  feedback_language: id
+  overall_feedback_below: 80
+items:
+  - id: question_1
+    label: Question 1
+    max_points: 25
+    criteria:
+      - id: question_1_concepts
+        description: Ketepatan dan kelengkapan konsep yang digunakan untuk menjawab pertanyaan.
+        max_points: 8
+        required_evidence: Definisi, prinsip, atau konsep yang relevan dalam jawaban.
+        levels:
+          - score: 0
+            description: Tidak ada konsep yang relevan atau jawaban tidak menjawab pertanyaan.
+          - score: 4
+            description: Konsep utama disebutkan tetapi masih sebagian atau kurang tepat.
+          - score: 8
+            description: Konsep utama dijelaskan lengkap dan tepat sesuai pertanyaan.
+      - id: question_1_analysis
+        description: Kedalaman analisis dan hubungan sebab-akibat dalam jawaban.
+        max_points: 9
+        required_evidence: Penalaran yang menghubungkan konsep dengan masalah atau kasus.
+        levels:
+          - score: 0
+            description: Tidak ada analisis atau seluruh jawaban tidak relevan.
+          - score: 4
+            description: Ada analisis awal tetapi hubungan antarargumen belum jelas.
+          - score: 9
+            description: Analisis mendalam, logis, dan konsisten dengan konteks pertanyaan.
+      - id: question_1_argument
+        description: Kekuatan argumen dan penggunaan contoh atau bukti pendukung.
+        max_points: 8
+        required_evidence: Contoh, alasan, data, atau bukti yang mendukung kesimpulan.
+        levels:
+          - score: 0
+            description: Tidak ada argumen atau bukti pendukung.
+          - score: 4
+            description: Argumen atau contoh tersedia tetapi umum, lemah, atau tidak terhubung.
+          - score: 8
+            description: Argumen kuat dan setiap kesimpulan didukung contoh atau bukti yang relevan.
+
+  - id: question_2
+    label: Question 2
+    max_points: 35
+    criteria:
+      - id: question_2_understanding
+        description: Pemahaman terhadap konsep dan tuntutan pertanyaan kedua.
+        max_points: 10
+        required_evidence: Penjelasan akurat tentang konsep yang diminta.
+        levels:
+          - score: 0
+            description: Tidak menunjukkan pemahaman terhadap pertanyaan.
+          - score: 5
+            description: Menunjukkan pemahaman dasar tetapi masih ada kekeliruan atau bagian yang hilang.
+          - score: 10
+            description: Menunjukkan pemahaman menyeluruh dan akurat.
+      - id: question_2_application
+        description: Penerapan konsep pada konteks, kasus, atau skenario yang diminta.
+        max_points: 10
+        required_evidence: Pemetaan konsep ke fakta atau kondisi pada kasus.
+        levels:
+          - score: 0
+            description: Tidak ada penerapan pada konteks yang diminta.
+          - score: 5
+            description: Penerapan ada tetapi dangkal atau hanya sebagian sesuai konteks.
+          - score: 10
+            description: Penerapan spesifik, tepat, dan menjawab seluruh konteks kasus.
+      - id: question_2_evidence
+        description: Kualitas alasan, contoh, dan bukti yang mendukung analisis.
+        max_points: 8
+        required_evidence: Bukti atau contoh yang dapat ditelusuri dari jawaban.
+        levels:
+          - score: 0
+            description: Tidak ada bukti atau alasan pendukung.
+          - score: 4
+            description: Bukti tersedia tetapi terbatas, umum, atau kurang terhubung.
+          - score: 8
+            description: Bukti relevan, cukup, dan digunakan untuk mendukung tiap klaim utama.
+      - id: question_2_clarity
+        description: Kejelasan, struktur, dan ketepatan penyampaian jawaban.
+        max_points: 7
+        required_evidence: Struktur jawaban yang memungkinkan alur argumen diikuti.
+        levels:
+          - score: 0
+            description: Jawaban tidak dapat dipahami atau tidak memiliki struktur.
+          - score: 3
+            description: Jawaban dapat dipahami tetapi alurnya tidak konsisten atau berulang.
+          - score: 7
+            description: Jawaban tersusun jelas, ringkas, dan mudah diikuti.
+
+  - id: question_3
+    label: Question 3
+    max_points: 40
+    criteria:
+      - id: question_3_completeness
+        description: Kelengkapan jawaban terhadap seluruh bagian pertanyaan ketiga.
+        max_points: 12
+        required_evidence: Jawaban eksplisit untuk setiap bagian atau subpertanyaan.
+        levels:
+          - score: 0
+            description: Tidak menjawab pertanyaan atau sebagian besar bagian terlewat.
+          - score: 6
+            description: Sebagian besar bagian dijawab tetapi masih ada celah penting.
+          - score: 12
+            description: Semua bagian dijawab secara eksplisit dan memadai.
+      - id: question_3_analysis
+        description: Kedalaman pemikiran kritis dan evaluasi alternatif.
+        max_points: 10
+        required_evidence: Perbandingan, evaluasi, batasan, atau konsekuensi yang dianalisis.
+        levels:
+          - score: 0
+            description: Tidak ada analisis kritis.
+          - score: 5
+            description: Ada evaluasi tetapi belum mendalam atau belum mempertimbangkan alternatif.
+          - score: 10
+            description: Evaluasi kritis mendalam dengan alasan dan konsekuensi yang jelas.
+      - id: question_3_recommendations
+        description: Ketepatan dan kelayakan rekomendasi atau solusi yang diberikan.
+        max_points: 10
+        required_evidence: Rekomendasi spesifik yang diturunkan dari analisis jawaban.
+        levels:
+          - score: 0
+            description: Tidak ada rekomendasi atau rekomendasi tidak relevan.
+          - score: 5
+            description: Rekomendasi relevan tetapi masih umum atau kurang dapat diterapkan.
+          - score: 10
+            description: Rekomendasi spesifik, relevan, dan didukung alasan yang kuat.
+      - id: question_3_clarity
+        description: Kejelasan struktur dan ketepatan komunikasi jawaban.
+        max_points: 8
+        required_evidence: Alur penjelasan yang konsisten dari masalah hingga kesimpulan.
+        levels:
+          - score: 0
+            description: Jawaban tidak dapat diikuti.
+          - score: 4
+            description: Alur dasar terlihat tetapi terdapat lompatan logika atau pengulangan.
+          - score: 8
+            description: Alur sangat jelas, koheren, dan mendukung pemahaman pembaca.
