@@ -1,5 +1,4 @@
 from collections.abc import Hashable
-import math
 from pathlib import Path
 from typing import Annotated, Literal, Self, TypeVar
 
@@ -9,8 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
-UnitFloat = Annotated[float, Field(ge=0, le=1)]
-PositiveUnitFloat = Annotated[float, Field(gt=0, le=1)]
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
@@ -130,69 +127,17 @@ class RubricConfig(_ConfigModel):
         return self
 
 
-class TemplateLevel(_ConfigModel):
-    fraction: UnitFloat
-    description: NonEmptyStr
-
-
-class CriterionTemplate(_ConfigModel):
-    id: NonEmptyStr
-    weight: PositiveUnitFloat
-    description: NonEmptyStr
-    required_evidence: NonEmptyStr
-    levels: list[TemplateLevel] = Field(min_length=2)
-
-    @model_validator(mode="after")
-    def validate_levels(self) -> Self:
-        fractions = [level.fraction for level in self.levels]
-        if len(set(fractions)) != len(fractions):
-            raise ValueError("duplicate template level fraction")
-        if 0.0 not in fractions:
-            raise ValueError("template levels must include fraction 0.0")
-        if 1.0 not in fractions:
-            raise ValueError("template levels must include fraction 1.0")
-        return self
-
-
-class RubricTemplateMeta(_ConfigModel):
+class RubricCatalogMeta(_ConfigModel):
     id: NonEmptyStr
     feedback_language: NonEmptyStr = "id"
     overall_feedback_below: int = Field(ge=0, le=100)
 
 
-class RubricTemplate(_ConfigModel):
-    schema_version: Literal[2]
-    rubric: RubricTemplateMeta
-    criteria: list[CriterionTemplate] = Field(min_length=1)
-
-    @field_validator("schema_version", mode="before")
-    @classmethod
-    def validate_schema_version(cls, value: object) -> object:
-        if type(value) is not int or value != 2:
-            raise ValueError("schema_version must be integer 2")
-        return value
-
-    @model_validator(mode="after")
-    def validate_criteria(self) -> Self:
-        criterion_ids = [criterion.id for criterion in self.criteria]
-        if len(set(criterion_ids)) != len(criterion_ids):
-            raise ValueError("duplicate template criterion id")
-        weight_total = sum(criterion.weight for criterion in self.criteria)
-        if not math.isclose(weight_total, 1.0, abs_tol=1e-9):
-            raise ValueError(f"template weights must sum to 1, got {weight_total}")
-        return self
-
-
-class ManifestQuestion(_ConfigModel):
-    id: NonEmptyStr
-    label: NonEmptyStr
-    max_points: PositiveInt
-
-
-class ManifestAssignment(_ConfigModel):
+class CatalogAssignment(_ConfigModel):
     id: NonEmptyStr
     title: NonEmptyStr
     total_points: Literal[100]
+    questions: list[ItemConfig] = Field(min_length=1)
 
     @field_validator("total_points", mode="before")
     @classmethod
@@ -201,11 +146,56 @@ class ManifestAssignment(_ConfigModel):
             raise ValueError("assignment total_points must be integer 100")
         return value
 
+    @model_validator(mode="after")
+    def validate_questions(self) -> Self:
+        question_ids = [question.id for question in self.questions]
+        if len(set(question_ids)) != len(question_ids):
+            raise ValueError("duplicate catalog question id")
 
-class AssignmentManifest(_ConfigModel):
+        criterion_ids = [
+            criterion.id
+            for question in self.questions
+            for criterion in question.criteria
+        ]
+        if len(set(criterion_ids)) != len(criterion_ids):
+            raise ValueError("duplicate catalog criterion id")
+
+        question_total = sum(question.max_points for question in self.questions)
+        if question_total != self.total_points:
+            raise ValueError(
+                f"catalog question max_points sum {question_total} does not match "
+                f"assignment total_points {self.total_points}"
+            )
+        return self
+
+
+class RubricCatalog(_ConfigModel):
+    schema_version: Literal[3]
+    rubric: RubricCatalogMeta
+    assignments: list[CatalogAssignment] = Field(min_length=1)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def validate_schema_version(cls, value: object) -> object:
+        if type(value) is not int or value != 3:
+            raise ValueError("schema_version must be integer 3")
+        return value
+
+    @model_validator(mode="after")
+    def validate_assignments(self) -> Self:
+        assignment_ids = [assignment.id for assignment in self.assignments]
+        if len(set(assignment_ids)) != len(assignment_ids):
+            raise ValueError("duplicate catalog assignment id")
+        return self
+
+
+class AssignmentSelectorMeta(_ConfigModel):
+    id: NonEmptyStr
+
+
+class AssignmentSelector(_ConfigModel):
     schema_version: Literal[1]
-    assignment: ManifestAssignment
-    questions: list[ManifestQuestion] = Field(min_length=1)
+    assignment: AssignmentSelectorMeta
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -213,19 +203,6 @@ class AssignmentManifest(_ConfigModel):
         if type(value) is not int or value != 1:
             raise ValueError("schema_version must be integer 1")
         return value
-
-    @model_validator(mode="after")
-    def validate_questions(self) -> Self:
-        question_ids = [question.id for question in self.questions]
-        if len(set(question_ids)) != len(question_ids):
-            raise ValueError("duplicate manifest question id")
-        question_total = sum(question.max_points for question in self.questions)
-        if question_total != self.assignment.total_points:
-            raise ValueError(
-                f"question max_points sum {question_total} does not match "
-                f"assignment total_points {self.assignment.total_points}"
-            )
-        return self
 
 
 class RubricLoadError(ValueError):
@@ -262,104 +239,35 @@ def load_rubric(path: Path) -> RubricConfig:
     return _load_model(path, RubricConfig, "rubric")
 
 
-def load_rubric_template(path: Path) -> RubricTemplate:
-    return _load_model(path, RubricTemplate, "rubric template")
+def load_rubric_catalog(path: Path) -> RubricCatalog:
+    return _load_model(path, RubricCatalog, "rubric catalog")
 
 
-def load_assignment_manifest(path: Path) -> AssignmentManifest:
-    return _load_model(path, AssignmentManifest, "assignment manifest")
+def load_assignment_selector(path: Path) -> AssignmentSelector:
+    return _load_model(path, AssignmentSelector, "assignment selector")
 
 
-def build_effective_rubric(
-    template: RubricTemplate, manifest: AssignmentManifest
+def select_catalog_assignment(
+    catalog: RubricCatalog, assignment_id: str
 ) -> RubricConfig:
-    """Expand shared criteria and weekly question points into a strict rubric."""
-    criteria_points = {
-        question.id: _allocate_points(
-            question.max_points,
-            [criterion.weight for criterion in template.criteria],
-        )
-        for question in manifest.questions
-    }
-    items: list[ItemConfig] = []
-    for question in manifest.questions:
-        criteria = [
-            CriterionConfig(
-                id=f"{question.id}__{criterion.id}",
-                description=criterion.description,
-                max_points=criteria_points[question.id][index],
-                required_evidence=criterion.required_evidence,
-                levels=_scaled_levels(
-                    criterion.levels,
-                        criteria_points[question.id][index],
-                ),
-            )
-            for index, criterion in enumerate(template.criteria)
-        ]
-        items.append(
-            ItemConfig(
-                id=question.id,
-                label=question.label,
-                max_points=question.max_points,
-                criteria=criteria,
-            )
-        )
-
+    """Convert one validated catalog assignment to the runtime rubric."""
+    assignment = next(
+        (item for item in catalog.assignments if item.id == assignment_id),
+        None,
+    )
+    if assignment is None:
+        raise RubricLoadError(f"unknown assignment: {assignment_id}")
     return RubricConfig(
         schema_version=1,
         assignment=AssignmentConfig(
-            id=manifest.assignment.id,
-            title=manifest.assignment.title,
-            total_points=manifest.assignment.total_points,
-            feedback_language=template.rubric.feedback_language,
-            overall_feedback_below=template.rubric.overall_feedback_below,
+            id=assignment.id,
+            title=assignment.title,
+            total_points=assignment.total_points,
+            feedback_language=catalog.rubric.feedback_language,
+            overall_feedback_below=catalog.rubric.overall_feedback_below,
         ),
-        items=items,
+        items=assignment.questions,
     )
-
-
-def _allocate_points(total_points: int, weights: list[float]) -> tuple[int, ...]:
-    if total_points < len(weights):
-        raise ValueError(
-            f"question max_points {total_points} is too small for "
-            f"{len(weights)} criteria"
-        )
-
-    raw_points = [total_points * weight for weight in weights]
-    allocated = [math.floor(value) for value in raw_points]
-    remaining = total_points - sum(allocated)
-    order = sorted(
-        range(len(weights)),
-        key=lambda index: (raw_points[index] - allocated[index], -index),
-        reverse=True,
-    )
-    for index in order[:remaining]:
-        allocated[index] += 1
-
-    if any(points <= 0 for points in allocated):
-        raise ValueError(
-            "criterion point allocation produced a zero-point criterion; "
-            "increase the question max_points or reduce template criteria"
-        )
-    return tuple(allocated)
-
-
-def _scaled_levels(
-    levels: list[TemplateLevel], max_points: int
-) -> list[ScoreLevel]:
-    scaled: list[ScoreLevel] = []
-    seen_scores: set[int] = set()
-    for level in levels:
-        score = round(level.fraction * max_points)
-        if level.fraction == 0.0:
-            score = 0
-        elif level.fraction == 1.0:
-            score = max_points
-        if score in seen_scores:
-            continue
-        seen_scores.add(score)
-        scaled.append(ScoreLevel(score=score, description=level.description))
-    return scaled
 
 
 def _load_model(path: Path, model: type[ModelT], label: str) -> ModelT:

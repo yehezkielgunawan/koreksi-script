@@ -9,12 +9,12 @@ PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from grader_core.config import (
-    AssignmentManifest,
+    AssignmentSelector,
     RubricConfig,
+    RubricCatalog,
     RubricLoadError,
-    RubricTemplate,
-    build_effective_rubric,
     load_rubric,
+    select_catalog_assignment,
 )
 
 
@@ -408,109 +408,96 @@ def test_missing_rubric_file_rejected_clearly(tmp_path: Path) -> None:
     assert str(rubric_path) in str(exc_info.value)
 
 
-def _template_data() -> dict:
+def _catalog_data() -> dict:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "rubric": {
             "id": "individual",
             "feedback_language": "id",
             "overall_feedback_below": 80,
         },
-        "criteria": [
+        "assignments": [
             {
-                "id": "understanding",
-                "weight": 0.5,
-                "description": "Understands the question",
-                "required_evidence": "A direct answer",
-                "levels": [
-                    {"fraction": 0.0, "description": "Missing"},
-                    {"fraction": 0.5, "description": "Partial"},
-                    {"fraction": 1.0, "description": "Complete"},
+                "id": "week-04",
+                "title": "Week 4",
+                "total_points": 100,
+                "questions": [
+                    {
+                        "id": "question_1",
+                        "label": "Question 1",
+                        "max_points": 40,
+                        "criteria": [
+                            {
+                                "id": "governance_definition",
+                                "description": "Defines governance concepts.",
+                                "max_points": 20,
+                                "required_evidence": "Definitions.",
+                                "levels": [
+                                    {"score": 0, "description": "Missing."},
+                                    {"score": 20, "description": "Complete."},
+                                ],
+                            },
+                            {
+                                "id": "case_application",
+                                "description": "Applies concepts to the case.",
+                                "max_points": 20,
+                                "required_evidence": "Case reasoning.",
+                                "levels": [
+                                    {"score": 0, "description": "Missing."},
+                                    {"score": 20, "description": "Complete."},
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "id": "question_2",
+                        "label": "Question 2",
+                        "max_points": 60,
+                        "criteria": [
+                            {
+                                "id": "risk_method_comparison",
+                                "description": "Compares risk methods.",
+                                "max_points": 60,
+                                "required_evidence": "A comparison.",
+                                "levels": [
+                                    {"score": 0, "description": "Missing."},
+                                    {"score": 60, "description": "Complete."},
+                                ],
+                            }
+                        ],
+                    },
                 ],
-            },
-            {
-                "id": "analysis",
-                "weight": 0.5,
-                "description": "Analyzes the problem",
-                "required_evidence": "Relevant reasoning",
-                "levels": [
-                    {"fraction": 0.0, "description": "Missing"},
-                    {"fraction": 0.5, "description": "Partial"},
-                    {"fraction": 1.0, "description": "Complete"},
-                ],
-            },
+            }
         ],
     }
 
 
-def _manifest_data() -> dict:
-    return {
-        "schema_version": 1,
-        "assignment": {
-            "id": "week-04",
-            "title": "Week 4",
-            "total_points": 100,
-        },
-        "questions": [
-            {"id": "question_1", "label": "Question 1", "max_points": 40},
-            {"id": "question_2", "label": "Question 2", "max_points": 60},
-        ],
-    }
+def test_catalog_selects_question_specific_criteria() -> None:
+    catalog = RubricCatalog.model_validate(_catalog_data())
 
+    rubric = select_catalog_assignment(catalog, "week-04")
 
-def test_assignment_manifest_requires_exactly_100_points() -> None:
-    manifest = AssignmentManifest.model_validate(_manifest_data())
-
-    assert manifest.assignment.total_points == 100
-    assert sum(question.max_points for question in manifest.questions) == 100
-
-
-def test_assignment_manifest_rejects_non_100_question_total() -> None:
-    data = _manifest_data()
-    data["questions"][1]["max_points"] = 50
-
-    with pytest.raises(ValidationError, match="sum 90"):
-        AssignmentManifest.model_validate(data)
-
-
-def test_template_weights_must_sum_to_one() -> None:
-    data = _template_data()
-    data["criteria"][1]["weight"] = 0.4
-
-    with pytest.raises(ValidationError, match="weights must sum to 1"):
-        RubricTemplate.model_validate(data)
-
-
-def test_effective_rubric_generates_dynamic_question_items() -> None:
-    template = RubricTemplate.model_validate(_template_data())
-    manifest = AssignmentManifest.model_validate(_manifest_data())
-
-    rubric = build_effective_rubric(template, manifest)
-
-    assert rubric.assignment.total_points == 100
-    assert [item.id for item in rubric.items] == ["question_1", "question_2"]
-    assert [item.max_points for item in rubric.items] == [40, 60]
-    assert all(
-        sum(criterion.max_points for criterion in item.criteria) == item.max_points
-        for item in rubric.items
-    )
-    assert rubric.items[0].criteria[0].id == "question_1__understanding"
-
-
-def test_effective_rubric_supports_five_questions() -> None:
-    template = RubricTemplate.model_validate(_template_data())
-    data = _manifest_data()
-    data["questions"] = [
-        {
-            "id": f"question_{index}",
-            "label": f"Question {index}",
-            "max_points": 20,
-        }
-        for index in range(1, 6)
+    assert [criterion.id for criterion in rubric.items[0].criteria] == [
+        "governance_definition",
+        "case_application",
     ]
-    manifest = AssignmentManifest.model_validate(data)
+    assert rubric.items[1].criteria[0].id == "risk_method_comparison"
+    assert rubric.assignment.total_points == 100
 
-    rubric = build_effective_rubric(template, manifest)
 
-    assert len(rubric.items) == 5
-    assert sum(item.max_points for item in rubric.items) == 100
+def test_catalog_rejects_unknown_assignment_id() -> None:
+    catalog = RubricCatalog.model_validate(_catalog_data())
+
+    with pytest.raises(RubricLoadError, match="unknown assignment: week-99"):
+        select_catalog_assignment(catalog, "week-99")
+
+
+def test_assignment_selector_accepts_only_an_assignment_id() -> None:
+    selector = AssignmentSelector.model_validate(
+        {
+            "schema_version": 1,
+            "assignment": {"id": "week-04"},
+        }
+    )
+
+    assert selector.assignment.id == "week-04"
