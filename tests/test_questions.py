@@ -1,19 +1,19 @@
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from grader_core.config import ManifestQuestion
 from grader_core.questions import QuestionMappingError, extract_question_sections
 
 
-def _questions() -> list[ManifestQuestion]:
+def _questions() -> list[SimpleNamespace]:
     return [
-        ManifestQuestion(id="question_1", label="Question 1", max_points=40),
-        ManifestQuestion(id="question_2", label="Question 2", max_points=60),
+        SimpleNamespace(id="question_1", label="Question 1", max_points=40),
+        SimpleNamespace(id="question_2", label="Question 2", max_points=60),
     ]
 
 
@@ -32,7 +32,9 @@ def test_extract_question_sections_maps_manifest_questions() -> None:
 
 
 def test_extract_question_sections_accepts_all_text_for_one_question() -> None:
-    question = [ManifestQuestion(id="question_1", label="Question 1", max_points=100)]
+    question = [
+        SimpleNamespace(id="question_1", label="Question 1", max_points=100)
+    ]
 
     sections = extract_question_sections("<p>Explain governance.</p>", question)
 

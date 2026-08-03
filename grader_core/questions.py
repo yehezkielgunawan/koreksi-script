@@ -2,8 +2,8 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 import re
 from collections.abc import Sequence
+from typing import Protocol
 
-from grader_core.config import ManifestQuestion
 from grader_core.documents import extract_html_blocks
 
 
@@ -16,6 +16,12 @@ class QuestionSection:
     question_id: str
     label: str
     text: str
+
+
+class QuestionTarget(Protocol):
+    id: str
+    label: str
+    max_points: int
 
 
 class _VisibleQuestionParser(HTMLParser):
@@ -75,7 +81,7 @@ class _VisibleQuestionParser(HTMLParser):
 
 def extract_question_sections(
     html: str,
-    questions: Sequence[ManifestQuestion],
+    questions: Sequence[QuestionTarget],
 ) -> tuple[QuestionSection, ...]:
     """Map visible HTML sections to manifest questions without guessing."""
     if not questions:
@@ -105,7 +111,7 @@ def extract_question_sections(
         return (QuestionSection(question.id, question.label, text),)
 
     sections: dict[str, list[str]] = {}
-    current: ManifestQuestion | None = None
+    current: QuestionTarget | None = None
     for kind, text in blocks:
         matched = _find_question(text, questions) if kind == "heading" else None
         if matched is None and kind == "block" and current is None:
@@ -141,8 +147,8 @@ def extract_question_sections(
 
 
 def _find_question(
-    text: str, questions: Sequence[ManifestQuestion]
-) -> ManifestQuestion | None:
+    text: str, questions: Sequence[QuestionTarget]
+) -> QuestionTarget | None:
     matches = [
         question
         for index, question in enumerate(questions)
@@ -153,7 +159,7 @@ def _find_question(
     return matches[0] if matches else None
 
 
-def _matches_question(text: str, question: ManifestQuestion, index: int) -> bool:
+def _matches_question(text: str, question: QuestionTarget, index: int) -> bool:
     normalized_text = _normalize_label(text)
     if normalized_text == _normalize_label(question.label):
         return True
