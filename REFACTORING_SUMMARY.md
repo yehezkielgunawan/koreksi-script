@@ -18,9 +18,9 @@ The project uses one unified `grader.py` CLI backed by the `grader_core` package
 - `grader.py`: CLI and orchestration.
 - `grader_core/`: configuration, documents, grading, OpenRouter, and results modules.
 - `prompts/`: visual evidence and grading prompts.
-- `rubrics/`: combined individual and group catalogs with explicit per-question scoring criteria.
+- `rubrics/`: combined individual and group catalogs with per-question scoring criteria; concise string criteria are normalized into explicit runtime criteria.
 - `tests/`: core and CLI tests using synthetic documents and a fake API client.
 
 ## Migration Status
 
-The former independent script workflow and its prompt/output snapshots have been retired. New runs must use a combined rubric catalog, an `assignment.yaml` selector, and `results_v3.json`; old output filenames are rejected rather than overwritten. Scores and item percentages use a `0–100` scale. Each catalog assignment must total 100 points, and every question declares its own criteria, evidence requirements, and score levels.
+The former independent script workflow and its prompt/output snapshots have been retired. New runs must use a combined rubric catalog, an `assignment.yaml` selector, and `results_v3.json`; old output filenames are rejected rather than overwritten. Scores and item percentages use a `0–100` scale. Each catalog assignment must total 100 points, and every question declares its own criteria, evidence requirements, and score levels after shorthand normalization.

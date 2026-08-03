@@ -62,6 +62,50 @@ class ItemConfig(_ConfigModel):
     max_points: PositiveInt
     criteria: list[CriterionConfig] = Field(min_length=1)
 
+    @model_validator(mode="before")
+    @classmethod
+    def expand_criteria_shorthand(cls, value: object) -> object:
+        if not isinstance(value, dict) or not isinstance(
+            value.get("criteria"), str
+        ):
+            return value
+
+        item_id = value.get("id")
+        max_points = value.get("max_points")
+        if not isinstance(item_id, str) or not item_id.strip():
+            return value
+        if type(max_points) is not int or max_points <= 0:
+            return value
+
+        midpoint = max_points // 2
+        levels = [
+            {"score": 0, "description": "Not demonstrated."},
+        ]
+        if 0 < midpoint < max_points:
+            levels.append(
+                {
+                    "score": midpoint,
+                    "description": "Partially demonstrated.",
+                }
+            )
+        levels.append(
+            {"score": max_points, "description": "Fully demonstrated."}
+        )
+
+        expanded = dict(value)
+        expanded["criteria"] = [
+            {
+                "id": f"{item_id.strip()}_criterion",
+                "description": value["criteria"],
+                "max_points": max_points,
+                "required_evidence": (
+                    "Evidence in the submission demonstrating the stated criterion."
+                ),
+                "levels": levels,
+            }
+        ]
+        return expanded
+
     @model_validator(mode="after")
     def validate_max_points(self) -> Self:
         criteria_total = sum(criterion.max_points for criterion in self.criteria)

@@ -10,6 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from grader_core.config import (
     AssignmentSelector,
+    ItemConfig,
     RubricConfig,
     RubricCatalog,
     RubricLoadError,
@@ -501,3 +502,84 @@ def test_assignment_selector_accepts_only_an_assignment_id() -> None:
     )
 
     assert selector.assignment.id == "week-04"
+
+
+def test_item_shorthand_expands_to_one_full_point_criterion() -> None:
+    item = ItemConfig.model_validate(
+        {
+            "id": "question_1",
+            "label": "Question 1",
+            "max_points": 40,
+            "criteria": "Explains the required project technique.",
+        }
+    )
+
+    assert [criterion.id for criterion in item.criteria] == [
+        "question_1_criterion"
+    ]
+    criterion = item.criteria[0]
+    assert criterion.description == "Explains the required project technique."
+    assert criterion.max_points == 40
+    assert criterion.required_evidence == (
+        "Evidence in the submission demonstrating the stated criterion."
+    )
+    assert [level.score for level in criterion.levels] == [0, 20, 40]
+
+
+def test_item_shorthand_omits_duplicate_midpoint_for_one_point() -> None:
+    item = ItemConfig.model_validate(
+        {
+            "id": "question_1",
+            "label": "Question 1",
+            "max_points": 1,
+            "criteria": "Demonstrates the requirement.",
+        }
+    )
+
+    assert [level.score for level in item.criteria[0].levels] == [0, 1]
+
+
+def test_item_shorthand_rejects_empty_text() -> None:
+    with pytest.raises(ValidationError):
+        ItemConfig.model_validate(
+            {
+                "id": "question_1",
+                "label": "Question 1",
+                "max_points": 30,
+                "criteria": "   ",
+            }
+        )
+
+
+def test_catalog_accepts_four_shorthand_questions() -> None:
+    points = [30, 20, 20, 30]
+    catalog = RubricCatalog.model_validate(
+        {
+            "schema_version": 3,
+            "rubric": {
+                "id": "individual",
+                "feedback_language": "id",
+                "overall_feedback_below": 80,
+            },
+            "assignments": [
+                {
+                    "id": "individual-default",
+                    "title": "Individual College Student Essay",
+                    "total_points": 100,
+                    "questions": [
+                        {
+                            "id": f"question_{index}",
+                            "label": f"Question {index}",
+                            "max_points": max_points,
+                            "criteria": f"Criterion {index}.",
+                        }
+                        for index, max_points in enumerate(points, start=1)
+                    ],
+                }
+            ],
+        }
+    )
+
+    questions = catalog.assignments[0].questions
+    assert [question.max_points for question in questions] == points
+    assert [len(question.criteria) for question in questions] == [1, 1, 1, 1]

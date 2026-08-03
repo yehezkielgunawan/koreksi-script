@@ -45,7 +45,16 @@ Rubrics are strict combined YAML catalogs validated with Pydantic. The repositor
 - `rubrics/individual.yaml` for all individual assignment rubrics.
 - `rubrics/group.yaml` for all group assignment rubrics.
 
-Each `StudentAnswer*` directory must include an `assignment.yaml` selector. The selector chooses an assignment entry from the selected catalog; the catalog owns every question's points, criteria, required evidence, and score levels.
+Each `StudentAnswer*` directory must include an `assignment.yaml` selector. The selector chooses an assignment entry from the selected catalog; the catalog owns every question's points, criteria, required evidence, and score levels. A question may use a concise string criterion, which the loader expands into one deterministic full-point criterion with standard score levels and generic evidence validation. Detailed criterion lists remain supported when a question needs multiple weighted criteria.
+
+Example shorthand question:
+
+```yaml
+id: question_1
+label: Question 1
+max_points: 30
+criteria: Ability to explain the techniques and tools used.
+```
 
 Example selector:
 

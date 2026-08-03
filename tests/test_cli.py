@@ -32,18 +32,7 @@ assignments:
       - id: question_1
         label: Question 1
         max_points: 100
-        criteria:
-          - id: criterion_1
-            description: Explains the answer
-            max_points: 100
-            required_evidence: A clear explanation
-            levels:
-              - score: 0
-                description: Missing
-              - score: 50
-                description: Partial
-              - score: 100
-                description: Complete
+        criteria: Explains the answer.
 """
 
 VALID_SELECTOR = """\
@@ -195,7 +184,7 @@ def test_grade_writes_a_versioned_result_without_network_access(
                 assessments=[
                     CriterionAssessment(
                         item_id="question_1",
-                        criterion_id="criterion_1",
+                        criterion_id="question_1_criterion",
                         selected_score=100,
                         rationale="Jawaban didukung bukti.",
                         evidence=[EvidenceCitation(page=1, quote="Jawaban normal")],
