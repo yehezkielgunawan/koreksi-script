@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from hashlib import sha256
 import os
 from pathlib import Path
@@ -14,25 +15,30 @@ from dotenv import load_dotenv
 
 from grader_core import (
     DEFAULT_MODEL,
+    AssignmentManifest,
     EvidencePackage,
     NormalizationFailure,
+    QuestionMappingError,
+    QuestionSection,
     ResultGrade,
     ResultRecord,
     ResultStore,
     SubmissionFiles,
     build_fingerprint,
+    build_effective_rubric,
     calculate_grade,
     chunk_visual_pages,
     discover_submissions,
-    extract_html_blocks,
-    load_rubric,
+    extract_question_sections,
+    load_assignment_manifest,
+    load_rubric_template,
     normalize_document,
     render_visual_pages,
     select_visual_pages,
     validate_grading_response,
     validate_visual_evidence,
 )
-from grader_core.config import RubricConfig, RubricLoadError
+from grader_core.config import RubricConfig, RubricLoadError, RubricTemplate
 from grader_core.documents import NormalizedDocument
 from grader_core.openrouter import OpenRouterClient
 
@@ -40,8 +46,17 @@ from grader_core.openrouter import OpenRouterClient
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_VISUAL_PROMPT = PROJECT_ROOT / "prompts" / "visual_evidence.md"
 DEFAULT_GRADING_PROMPT = PROJECT_ROOT / "prompts" / "grading.md"
+DEFAULT_OUTPUT = "results_v3.json"
 LEGACY_OUTPUT_NAMES = {"individual_results.json", "group_results.json"}
 PROMPT_VERSION_PATTERN = re.compile(r"prompt_version:\s*([^\s>-]+)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class SubmissionContext:
+    submission: SubmissionFiles
+    manifest: AssignmentManifest
+    manifest_path: Path
+    rubric: RubricConfig
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -53,18 +68,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _validate_rubric(Path(args.rubric))
 
     try:
-        rubric, submissions = _preflight(args)
+        template, contexts = _preflight(args)
     except (OSError, RubricLoadError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
     if args.command == "regrade":
-        submissions = [
-            submission
-            for submission in submissions
-            if submission.student_id == args.student_id
+        contexts = [
+            context
+            for context in contexts
+            if context.submission.student_id == args.student_id
         ]
-        if not submissions:
+        if not contexts:
             print(
                 f"Error: student ID not found: {args.student_id}",
                 file=sys.stderr,
@@ -72,10 +87,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
     if args.dry_run:
-        return _run_dry_run(args, rubric, submissions)
+        return _run_dry_run(args, template, contexts)
 
     try:
-        return _run_grading(args, rubric, submissions)
+        return _run_grading(args, template, contexts)
     except (OSError, RubricLoadError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -111,7 +126,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _add_grading_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--rubric", required=True)
     parser.add_argument("--input", required=True, dest="input_root")
-    parser.add_argument("--output", default="results_v2.json")
+    parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--visual-prompt", default=str(DEFAULT_VISUAL_PROMPT))
     parser.add_argument("--grading-prompt", default=str(DEFAULT_GRADING_PROMPT))
@@ -119,32 +134,35 @@ def _add_grading_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _validate_rubric(path: Path) -> int:
     try:
-        rubric = load_rubric(path)
+        template = load_rubric_template(path)
     except (OSError, RubricLoadError, ValueError) as exc:
         print(f"Invalid rubric: {exc}", file=sys.stderr)
         return 2
 
     print(
-        f"Rubric valid: {rubric.assignment.id} "
-        f"({len(rubric.items)} items, {rubric.assignment.total_points} points)"
+        f"Rubric valid: {template.rubric.id} "
+        f"({len(template.criteria)} shared criteria, 100-point template)"
     )
     return 0
 
 
-def _preflight(args: argparse.Namespace) -> tuple[RubricConfig, list[SubmissionFiles]]:
-    rubric = load_rubric(Path(args.rubric))
+def _preflight(
+    args: argparse.Namespace,
+) -> tuple[RubricTemplate, list[SubmissionContext]]:
+    output_path = Path(args.output)
+    if output_path.name in LEGACY_OUTPUT_NAMES:
+        raise ValueError(
+            f"legacy output path is not allowed: {output_path.name}; "
+            "use results_v3.json or another versioned output"
+        )
+
+    template = load_rubric_template(Path(args.rubric))
     input_root = Path(args.input_root)
     assignment_roots = _assignment_roots(input_root)
     submissions = discover_submissions(assignment_roots)
     if not submissions:
         raise ValueError(f"no student submissions found under {input_root}")
 
-    output_path = Path(args.output)
-    if output_path.name in LEGACY_OUTPUT_NAMES:
-        raise ValueError(
-            f"legacy output path is not allowed: {output_path.name}; "
-            "use results_v2.json or another versioned output"
-        )
     _check_output_writable(output_path, create_parent=not args.dry_run)
 
     if not str(args.model).strip():
@@ -158,6 +176,29 @@ def _preflight(args: argparse.Namespace) -> tuple[RubricConfig, list[SubmissionF
 
     _check_prompt(Path(args.visual_prompt), "visual prompt")
     _check_prompt(Path(args.grading_prompt), "grading prompt")
+
+    manifest_cache: dict[Path, AssignmentManifest] = {}
+    contexts: list[SubmissionContext] = []
+    for submission in submissions:
+        manifest_path = _manifest_path(submission)
+        if manifest_path is None:
+            raise RubricLoadError(
+                "assignment manifest not found for "
+                f"{submission.folder}; expected assignment.yaml in the student "
+                "folder or StudentAnswer* root"
+            )
+        manifest = manifest_cache.get(manifest_path)
+        if manifest is None:
+            manifest = load_assignment_manifest(manifest_path)
+            manifest_cache[manifest_path] = manifest
+        contexts.append(
+            SubmissionContext(
+                submission=submission,
+                manifest=manifest,
+                manifest_path=manifest_path,
+                rubric=build_effective_rubric(template, manifest),
+            )
+        )
 
     document_extensions = {
         submission.answer_path.suffix.casefold()
@@ -179,7 +220,17 @@ def _preflight(args: argparse.Namespace) -> tuple[RubricConfig, list[SubmissionF
     if not args.dry_run and not os.getenv("OPENROUTER_API_KEY"):
         raise ValueError("OPENROUTER_API_KEY is required for grading")
 
-    return rubric, submissions
+    return template, contexts
+
+
+def _manifest_path(submission: SubmissionFiles) -> Path | None:
+    for path in (
+        submission.folder / "assignment.yaml",
+        submission.assignment_root / "assignment.yaml",
+    ):
+        if path.is_file():
+            return path
+    return None
 
 
 def _assignment_roots(input_root: Path) -> list[Path]:
@@ -221,21 +272,33 @@ def _check_prompt(path: Path, label: str) -> None:
 
 def _run_dry_run(
     args: argparse.Namespace,
-    rubric: RubricConfig,
-    submissions: Sequence[SubmissionFiles],
+    template: RubricTemplate,
+    contexts: Sequence[SubmissionContext],
 ) -> int:
     normalized_count = 0
-    review_count = sum(bool(submission.review_reasons) for submission in submissions)
+    review_count = sum(
+        bool(context.submission.review_reasons) for context in contexts
+    )
 
     with tempfile.TemporaryDirectory(prefix="koreksi-dry-run-") as temporary_dir:
         temporary_root = Path(temporary_dir)
-        for index, submission in enumerate(submissions):
+        for index, context in enumerate(contexts):
+            submission = context.submission
             if submission.answer_path is None:
                 print(
                     f"Review: {submission.student_id or submission.folder.name} "
                     f"({', '.join(submission.review_reasons)})"
                 )
                 continue
+
+            try:
+                _question_sections(context)
+            except QuestionMappingError as exc:
+                review_count += 1
+                print(
+                    f"Review: {submission.student_id or submission.folder.name} "
+                    f"(question mapping failed: {exc})"
+                )
 
             student_temp = temporary_root / str(index)
             normalized = normalize_document(submission.answer_path, student_temp)
@@ -264,11 +327,11 @@ def _run_dry_run(
                 )
 
     print(
-        f"Dry run: {len(submissions)} submission(s), "
+        f"Dry run: {len(contexts)} submission(s), "
         f"{normalized_count} normalized, {review_count} review item(s)."
     )
     print(
-        f"Rubric: {rubric.assignment.id}; no API requests were made and "
+        f"Rubric: {template.rubric.id}; no API requests were made and "
         f"no result file was written."
     )
     return 0
@@ -276,8 +339,8 @@ def _run_dry_run(
 
 def _run_grading(
     args: argparse.Namespace,
-    rubric: RubricConfig,
-    submissions: Sequence[SubmissionFiles],
+    template: RubricTemplate,
+    contexts: Sequence[SubmissionContext],
 ) -> int:
     output_path = Path(args.output)
     store = ResultStore(output_path)
@@ -285,7 +348,6 @@ def _run_grading(
     grading_prompt_path = Path(args.grading_prompt)
     visual_prompt = visual_prompt_path.read_text(encoding="utf-8")
     grading_prompt = grading_prompt_path.read_text(encoding="utf-8")
-    rubric_sha256 = _file_sha256(Path(args.rubric))
     visual_prompt_version = _prompt_version(visual_prompt)
     grading_prompt_version = _prompt_version(grading_prompt)
     client = OpenRouterClient(model=args.model)
@@ -294,10 +356,13 @@ def _run_grading(
     cached_count = 0
     review_count = 0
 
-    for index, submission in enumerate(submissions):
+    for index, context in enumerate(contexts):
+        submission = context.submission
         source_path = submission.answer_path or submission.folder
         file_path = str(source_path)
-        normalized: NormalizedDocument | None = None
+        rubric_sha256 = _combined_file_sha256(
+            Path(args.rubric), context.manifest_path
+        )
         fingerprint = _build_submission_fingerprint(
             submission,
             normalized=None,
@@ -330,15 +395,25 @@ def _run_grading(
                             cached_count += 1
                             print(f"Cached: {submission.student_id or file_path}")
                             continue
-                        record = _grade_submission(
-                            submission,
-                            normalized,
-                            fingerprint,
-                            rubric,
-                            visual_prompt,
-                            grading_prompt,
-                            client,
-                        )
+                        try:
+                            question_sections = _question_sections(context)
+                        except QuestionMappingError as exc:
+                            record = _review_record(
+                                submission,
+                                fingerprint,
+                                f"question_mapping_failed:{exc}",
+                            )
+                        else:
+                            record = _grade_submission(
+                                submission,
+                                normalized,
+                                fingerprint,
+                                context.rubric,
+                                question_sections,
+                                visual_prompt,
+                                grading_prompt,
+                                client,
+                            )
             except Exception as exc:
                 record = ResultRecord(
                     status="error",
@@ -374,16 +449,20 @@ def _grade_submission(
     normalized: NormalizedDocument,
     fingerprint: object,
     rubric: RubricConfig,
+    question_sections: Sequence[QuestionSection],
     visual_prompt: str,
     grading_prompt: str,
     client: OpenRouterClient,
 ) -> ResultRecord:
-    question_text, question_reasons = _question_text(submission)
+    question_text = "\n\n".join(
+        f"[{section.question_id}] {section.label}\n{section.text}"
+        for section in question_sections
+    )
     answer_text = "\n\n".join(
         f"[Page {page.number}]\n{page.text}" for page in normalized.pages if page.text
     )
     visual_evidence = []
-    review_reasons = list(question_reasons)
+    review_reasons: list[str] = []
 
     with tempfile.TemporaryDirectory(prefix="koreksi-render-") as rendered_temp:
         selected_pages = select_visual_pages(normalized)
@@ -436,16 +515,19 @@ def _grade_submission(
     )
 
 
-def _question_text(submission: SubmissionFiles) -> tuple[str, list[str]]:
+def _question_sections(context: SubmissionContext) -> tuple[QuestionSection, ...]:
+    submission = context.submission
     if submission.question_path is None:
-        return "", ["missing_question_file"]
+        raise QuestionMappingError("missing_question_file")
     try:
-        return (
-            extract_html_blocks(submission.question_path.read_text(encoding="utf-8")),
-            [],
+        return extract_question_sections(
+            submission.question_path.read_text(encoding="utf-8"),
+            context.manifest.questions,
         )
     except (OSError, UnicodeDecodeError) as exc:
-        return "", [f"question_read_failed:{type(exc).__name__}"]
+        raise QuestionMappingError(
+            f"question_read_failed:{type(exc).__name__}"
+        ) from exc
 
 
 def _review_record(
@@ -517,6 +599,14 @@ def _file_sha256(path: Path) -> str:
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _combined_file_sha256(*paths: Path) -> str:
+    digest = sha256()
+    for path in paths:
+        digest.update(_file_sha256(path).encode("ascii"))
+        digest.update(b"\0")
     return digest.hexdigest()
 
 

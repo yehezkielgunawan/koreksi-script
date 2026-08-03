@@ -19,35 +19,47 @@ from grader_core.results import ResultsDocument
 
 
 VALID_RUBRIC = """\
+schema_version: 2
+rubric:
+  id: cli-test
+  feedback_language: id
+  overall_feedback_below: 80
+criteria:
+  - id: criterion_1
+    weight: 1.0
+    description: Explains the answer
+    required_evidence: A clear explanation
+    levels:
+      - fraction: 0.0
+        description: Missing
+      - fraction: 0.5
+        description: Partial
+      - fraction: 1.0
+        description: Complete
+"""
+
+VALID_MANIFEST = """\
 schema_version: 1
 assignment:
-  id: cli-test
-  title: CLI test
-  total_points: 10
-  feedback_language: id
-  overall_feedback_below: 8
-items:
+  id: week-01
+  title: Week 1
+  total_points: 100
+questions:
   - id: question_1
     label: Question 1
-    max_points: 10
-    criteria:
-      - id: criterion_1
-        description: Explains the answer
-        max_points: 10
-        required_evidence: A clear explanation
-        levels:
-          - score: 0
-            description: Missing
-          - score: 5
-            description: Partial
-          - score: 10
-            description: Complete
+    max_points: 100
 """
 
 
 def _write_rubric(tmp_path: Path) -> Path:
     path = tmp_path / "rubric.yaml"
     path.write_text(VALID_RUBRIC, encoding="utf-8")
+    return path
+
+
+def _write_manifest(assignment_root: Path, content: str = VALID_MANIFEST) -> Path:
+    path = assignment_root / "assignment.yaml"
+    path.write_text(content, encoding="utf-8")
     return path
 
 
@@ -73,7 +85,8 @@ def test_grade_dry_run_discovers_and_normalizes_without_api_client(
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
     shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
-    output_path = tmp_path / "results_v2.json"
+    _write_manifest(assignment_root)
+    output_path = tmp_path / "results_v3.json"
 
     def fail_if_initialized(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("dry-run must not initialize the API client")
@@ -110,10 +123,11 @@ def test_grade_writes_a_versioned_result_without_network_access(
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
     shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
+    _write_manifest(assignment_root)
     (student_folder / "Question.html").write_text(
         "<p>Explain the answer.</p>", encoding="utf-8"
     )
-    output_path = tmp_path / "results_v2.json"
+    output_path = tmp_path / "results_v3.json"
 
     class FakeClient:
         def __init__(self, **_kwargs: object) -> None:
@@ -140,8 +154,8 @@ def test_grade_writes_a_versioned_result_without_network_access(
                 assessments=[
                     CriterionAssessment(
                         item_id="question_1",
-                        criterion_id="criterion_1",
-                        selected_score=10,
+                        criterion_id="question_1__criterion_1",
+                        selected_score=100,
                         rationale="Jawaban didukung bukti.",
                         evidence=[EvidenceCitation(page=1, quote="Jawaban normal")],
                         readability="clear",
@@ -170,7 +184,89 @@ def test_grade_writes_a_versioned_result_without_network_access(
     document = ResultsDocument.model_validate_json(output_path.read_text())
     assert document.results[0].status == "graded"
     assert document.results[0].grade is not None
-    assert document.results[0].grade.total_score == 10
+    assert document.results[0].grade.total_score == 100
+    assert all(0 <= value <= 100 for value in document.results[0].grade.item_percentages.values())
+
+
+def test_grade_dry_run_uses_dynamic_manifest_questions(
+    tmp_path: Path,
+    synthetic_pdf_files: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rubric_path = _write_rubric(tmp_path)
+    assignment_root = tmp_path / "StudentAnswer_DYNAMIC"
+    student_folder = assignment_root / "123_TEST STUDENT"
+    student_folder.mkdir(parents=True)
+    shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
+    _write_manifest(
+        assignment_root,
+        VALID_MANIFEST.replace(
+            "  - id: question_1\n    label: Question 1\n    max_points: 100",
+            "  - id: question_1\n    label: Question 1\n    max_points: 40\n"
+            "  - id: question_2\n    label: Question 2\n    max_points: 60",
+        ),
+    )
+    (assignment_root / "Question.html").write_text(
+        "<h2>Question 1</h2><p>First statement.</p>"
+        "<h2>Question 2</h2><p>Second statement.</p>",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "results_v3.json"
+
+    monkeypatch.setattr(
+        "grader.OpenRouterClient",
+        lambda *_args, **_kwargs: pytest.fail("dry-run must not initialize API"),
+    )
+
+    exit_code = main(
+        [
+            "grade",
+            "--rubric",
+            str(rubric_path),
+            "--input",
+            str(assignment_root),
+            "--output",
+            str(output_path),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    assert not output_path.exists()
+    assert "dry run" in capsys.readouterr().out.lower()
+
+
+def test_grade_requires_assignment_manifest_before_api(
+    tmp_path: Path,
+    synthetic_pdf_files: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rubric_path = _write_rubric(tmp_path)
+    assignment_root = tmp_path / "StudentAnswer_NO_MANIFEST"
+    student_folder = assignment_root / "123_TEST STUDENT"
+    student_folder.mkdir(parents=True)
+    shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
+    monkeypatch.setattr(
+        "grader.OpenRouterClient",
+        lambda *_args, **_kwargs: pytest.fail("API must not initialize"),
+    )
+
+    exit_code = main(
+        [
+            "grade",
+            "--rubric",
+            str(rubric_path),
+            "--input",
+            str(assignment_root),
+            "--output",
+            str(tmp_path / "results_v3.json"),
+        ]
+    )
+
+    assert exit_code == 2
+    assert "assignment manifest" in capsys.readouterr().err.lower()
 
 
 def test_grade_rejects_legacy_output_paths(
