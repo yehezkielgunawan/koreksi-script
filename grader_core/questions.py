@@ -24,6 +24,11 @@ class QuestionTarget(Protocol):
     max_points: int
 
 
+_NUMBERED_QUESTION_PATTERN = re.compile(
+    r"(?m)^\s*(?P<number>\d+)[.)]\s+"
+)
+
+
 class _VisibleQuestionParser(HTMLParser):
     _HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
     _BLOCK_TAGS = _HEADING_TAGS | frozenset(
@@ -90,7 +95,7 @@ def extract_question_sections(
     parser = _VisibleQuestionParser()
     parser.feed(html)
     parser.close()
-    blocks = parser.finish()
+    blocks = _split_numbered_question_blocks(parser.finish(), len(questions))
 
     if len(questions) == 1:
         question = questions[0]
@@ -144,6 +149,34 @@ def extract_question_sections(
         )
         for question in questions
     )
+
+
+def _split_numbered_question_blocks(
+    blocks: Sequence[tuple[str, str]], question_count: int
+) -> list[tuple[str, str]]:
+    expanded: list[tuple[str, str]] = []
+    for kind, text in blocks:
+        matches = list(_NUMBERED_QUESTION_PATTERN.finditer(text))
+        if (
+            len(matches) != question_count
+            or not matches
+            or matches[0].start() != 0
+        ):
+            expanded.append((kind, text))
+            continue
+
+        for index, match in enumerate(matches):
+            end = (
+                matches[index + 1].start()
+                if index + 1 < len(matches)
+                else len(text)
+            )
+            statement = text[match.end() : end].strip()
+            if not statement:
+                continue
+            expanded.append(("heading", f"Question {match.group('number')}"))
+            expanded.append(("block", statement))
+    return expanded
 
 
 def _find_question(

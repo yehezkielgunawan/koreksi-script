@@ -41,7 +41,7 @@ Dry runs perform discovery, assignment-selector and catalog validation, document
 ## Key Behavior
 
 - Rubrics are strict combined YAML catalogs; each selected assignment defines every question's points, criteria, required evidence, and score levels. A string criterion is expanded into one deterministic full-point criterion; detailed criterion lists remain supported.
-- Each `StudentAnswer*` root requires an `assignment.yaml` selector whose ID exists in the selected catalog.
+- Each `StudentAnswer*` root may provide an `assignment.yaml` selector whose ID exists in the selected catalog. If the catalog has exactly one assignment, that assignment is selected when the selector is absent; multiple assignments require an explicit selector.
 - Question statements come from a student-level `Question.html` or the assignment-root fallback. Ambiguous mappings require review.
 - The model returns evidence and criterion assessments; Python calculates totals and selects the weakest item.
 - Results are saved atomically after each submission and skipped only when the complete fingerprint matches.

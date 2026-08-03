@@ -23,4 +23,4 @@ The project uses one unified `grader.py` CLI backed by the `grader_core` package
 
 ## Migration Status
 
-The former independent script workflow and its prompt/output snapshots have been retired. New runs must use a combined rubric catalog, an `assignment.yaml` selector, and `results_v3.json`; old output filenames are rejected rather than overwritten. Scores and item percentages use a `0–100` scale. Each catalog assignment must total 100 points, and every question declares its own criteria, evidence requirements, and score levels after shorthand normalization.
+The former independent script workflow and its prompt/output snapshots have been retired. New runs must use a combined rubric catalog and `results_v3.json`; an `assignment.yaml` selector is optional for a single-assignment catalog and required when the catalog has multiple assignments. Old output filenames are rejected rather than overwritten. Scores and item percentages use a `0–100` scale. Each catalog assignment must total 100 points, and every question declares its own criteria, evidence requirements, and score levels after shorthand normalization.

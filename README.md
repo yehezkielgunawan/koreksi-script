@@ -45,7 +45,7 @@ Rubrics are strict combined YAML catalogs validated with Pydantic. The repositor
 - `rubrics/individual.yaml` for all individual assignment rubrics.
 - `rubrics/group.yaml` for all group assignment rubrics.
 
-Each `StudentAnswer*` directory must include an `assignment.yaml` selector. The selector chooses an assignment entry from the selected catalog; the catalog owns every question's points, criteria, required evidence, and score levels. A question may use a concise string criterion, which the loader expands into one deterministic full-point criterion with standard score levels and generic evidence validation. Detailed criterion lists remain supported when a question needs multiple weighted criteria.
+Each `StudentAnswer*` directory may include an `assignment.yaml` selector. The selector chooses an assignment entry from the selected catalog; when the catalog contains exactly one assignment, the grader selects that sole entry if the selector is absent. A selector is required when the catalog contains multiple assignments. The catalog owns every question's points, criteria, required evidence, and score levels. A question may use a concise string criterion, which the loader expands into one deterministic full-point criterion with standard score levels and generic evidence validation. Detailed criterion lists remain supported when a question needs multiple weighted criteria.
 
 Example shorthand question:
 
@@ -124,7 +124,7 @@ Retired output filenames are rejected to prevent accidental mixing of incompatib
 
 - `OPENROUTER_API_KEY is required`: set the key in `.env` or the shell environment.
 - `LibreOffice is required`: install LibreOffice before grading DOC or DOCX files; PDF-only dry runs do not require it.
-- `assignment selector not found`: add a strict `assignment.yaml` with an assignment ID to the `StudentAnswer*` root or affected student folder.
+- `assignment selector not found`: add a strict `assignment.yaml` with an assignment ID to the `StudentAnswer*` root or affected student folder when the catalog contains multiple assignments.
 - `no student submissions found`: check that the input contains directories beginning with `StudentAnswer` and student folders with supported documents.
 - A `needs_review` record is intentional. Inspect the separate review queue instead of treating it as an automatic pass or failure.
 

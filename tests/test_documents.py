@@ -101,6 +101,18 @@ def test_discover_submissions_uses_assignment_root_question_fallback(
     assert submission.answer_path == answer_path
 
 
+def test_discover_submissions_parses_group_folder_identity(tmp_path: Path) -> None:
+    assignment_root = tmp_path / "StudentAnswer_ISYS6310035"
+    group_folder = assignment_root / "Group_Group-1"
+    answer_path = _write(group_folder / "submission.pdf")
+
+    submission = discover_submissions([assignment_root])[0]
+
+    assert submission.student_id == "group-1"
+    assert submission.student_name == "Group 1"
+    assert submission.answer_path == answer_path
+
+
 def test_discover_submissions_rejects_non_assignment_roots(tmp_path: Path) -> None:
     non_assignment_root = tmp_path / "uploads"
     non_assignment_root.mkdir()

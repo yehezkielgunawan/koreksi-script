@@ -56,7 +56,7 @@ PROMPT_VERSION_PATTERN = re.compile(r"prompt_version:\s*([^\s>-]+)", re.IGNORECA
 class SubmissionContext:
     submission: SubmissionFiles
     selector: AssignmentSelector
-    selector_path: Path
+    selector_path: Path | None
     rubric: RubricConfig
 
 
@@ -179,19 +179,35 @@ def _preflight(
     _check_prompt(Path(args.grading_prompt), "grading prompt")
 
     selector_cache: dict[Path, AssignmentSelector] = {}
+    implicit_selector: AssignmentSelector | None = None
     contexts: list[SubmissionContext] = []
     for submission in submissions:
         selector_path = _selector_path(submission)
         if selector_path is None:
-            raise RubricLoadError(
-                "assignment selector not found for "
-                f"{submission.folder}; expected assignment.yaml in the student "
-                "folder or StudentAnswer* root"
-            )
-        selector = selector_cache.get(selector_path)
-        if selector is None:
-            selector = load_assignment_selector(selector_path)
-            selector_cache[selector_path] = selector
+            if len(catalog.assignments) != 1:
+                raise RubricLoadError(
+                    "assignment selector not found for "
+                    f"{submission.folder}; expected assignment.yaml in the student "
+                    "folder or StudentAnswer* root"
+                )
+            if implicit_selector is None:
+                implicit_selector = AssignmentSelector.model_validate(
+                    {
+                        "schema_version": 1,
+                        "assignment": {"id": catalog.assignments[0].id},
+                    }
+                )
+                print(
+                    "Warning: assignment.yaml not found; using the sole catalog "
+                    f"assignment {implicit_selector.assignment.id!r}.",
+                    file=sys.stderr,
+                )
+            selector = implicit_selector
+        else:
+            selector = selector_cache.get(selector_path)
+            if selector is None:
+                selector = load_assignment_selector(selector_path)
+                selector_cache[selector_path] = selector
         contexts.append(
             SubmissionContext(
                 submission=submission,

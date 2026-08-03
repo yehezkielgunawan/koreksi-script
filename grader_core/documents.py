@@ -34,6 +34,10 @@ DOCUMENT_CONVERSION_UNAVAILABLE = "document_conversion_unavailable"
 DOCUMENT_CONVERSION_FAILED = "document_conversion_failed"
 
 _STUDENT_FOLDER_PATTERN = re.compile(r"^(?P<id>\d+)_(?P<name>.+)$")
+_GROUP_FOLDER_PATTERN = re.compile(
+    r"^group(?:[_ -]+group)?[_ -]+(?P<number>\d+)$",
+    re.IGNORECASE,
+)
 _TEXT_BLOCK_TAGS = frozenset(
     {
         "address",
@@ -373,6 +377,12 @@ def _student_identity(folder_name: str) -> tuple[str, str]:
     match = _STUDENT_FOLDER_PATTERN.match(folder_name)
     if match:
         return match.group("id"), match.group("name").replace("_", " ")
+
+    group_match = _GROUP_FOLDER_PATTERN.match(folder_name)
+    if group_match:
+        group_number = group_match.group("number")
+        return f"group-{group_number}", f"Group {group_number}"
+
     return "", folder_name.replace("_", " ")
 
 

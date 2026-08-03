@@ -35,6 +35,17 @@ assignments:
         criteria: Explains the answer.
 """
 
+MULTIPLE_ASSIGNMENTS_RUBRIC = VALID_RUBRIC + """\
+  - id: week-02
+    title: Week 2
+    total_points: 100
+    questions:
+      - id: question_1
+        label: Question 1
+        max_points: 100
+        criteria: Explains the answer.
+"""
+
 VALID_SELECTOR = """\
 schema_version: 1
 assignment:
@@ -141,6 +152,43 @@ def test_grade_dry_run_discovers_and_normalizes_without_api_client(
     output = capsys.readouterr().out.lower()
     assert "1 submission" in output
     assert "dry run" in output
+
+
+def test_grade_dry_run_uses_sole_catalog_assignment_without_selector(
+    tmp_path: Path,
+    synthetic_pdf_files: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rubric_path = _write_catalog(tmp_path)
+    assignment_root = tmp_path / "StudentAnswer_GROUP_ASSIGNMENT"
+    group_folder = assignment_root / "Group_Group-1"
+    group_folder.mkdir(parents=True)
+    shutil.copyfile(synthetic_pdf_files["text"], group_folder / "answer.pdf")
+    (group_folder / "Question.html").write_text(
+        "<p>Question 1</p>", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        "grader.OpenRouterClient",
+        lambda *_args, **_kwargs: pytest.fail("dry-run must not initialize API"),
+    )
+
+    exit_code = main(
+        [
+            "grade",
+            "--rubric",
+            str(rubric_path),
+            "--input",
+            str(assignment_root),
+            "--output",
+            str(tmp_path / "results_v3.json"),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    assert "1 submission" in capsys.readouterr().out
 
 
 def test_grade_writes_a_versioned_result_without_network_access(
@@ -269,7 +317,7 @@ def test_grade_requires_assignment_selector_before_api(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    rubric_path = _write_catalog(tmp_path)
+    rubric_path = _write_catalog(tmp_path, MULTIPLE_ASSIGNMENTS_RUBRIC)
     assignment_root = tmp_path / "StudentAnswer_NO_SELECTOR"
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)

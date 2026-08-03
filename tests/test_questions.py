@@ -31,6 +31,20 @@ def test_extract_question_sections_maps_catalog_questions() -> None:
     ]
 
 
+def test_extract_question_sections_splits_inline_numbered_questions() -> None:
+    html = (
+        "1. Explain governance.<br><br>"
+        "2. Apply the framework.<br><br>"
+    )
+
+    sections = extract_question_sections(html, _questions())
+
+    assert [(section.question_id, section.text) for section in sections] == [
+        ("question_1", "Explain governance."),
+        ("question_2", "Apply the framework."),
+    ]
+
+
 def test_extract_question_sections_accepts_all_text_for_one_question() -> None:
     question = [
         SimpleNamespace(id="question_1", label="Question 1", max_points=100)
