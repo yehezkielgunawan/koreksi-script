@@ -11,7 +11,7 @@ The project uses one unified `grader.py` CLI backed by the `grader_core` package
 5. Request structured visual evidence and grading responses from OpenRouter.
 6. Validate all model evidence against the document and rubric.
 7. Calculate criterion, item, and total scores in Python.
-8. Persist fingerprinted version-2 results atomically and write a separate review queue.
+8. Persist fingerprinted version-3 results atomically and write a separate review queue.
 
 ## Current Files
 
@@ -23,4 +23,4 @@ The project uses one unified `grader.py` CLI backed by the `grader_core` package
 
 ## Migration Status
 
-The former independent script workflow and its prompt/output snapshots have been retired. New runs must use the unified CLI and `results_v2.json`; old output filenames are rejected rather than overwritten.
+The former independent script workflow and its prompt/output snapshots have been retired. New runs must use a shared rubric template, an `assignment.yaml` weekly manifest, and `results_v3.json`; old output filenames are rejected rather than overwritten. Scores and item percentages use a `0–100` scale.

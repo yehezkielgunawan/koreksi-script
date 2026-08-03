@@ -495,3 +495,22 @@ def test_effective_rubric_generates_dynamic_question_items() -> None:
         for item in rubric.items
     )
     assert rubric.items[0].criteria[0].id == "question_1__understanding"
+
+
+def test_effective_rubric_supports_five_questions() -> None:
+    template = RubricTemplate.model_validate(_template_data())
+    data = _manifest_data()
+    data["questions"] = [
+        {
+            "id": f"question_{index}",
+            "label": f"Question {index}",
+            "max_points": 20,
+        }
+        for index in range(1, 6)
+    ]
+    manifest = AssignmentManifest.model_validate(data)
+
+    rubric = build_effective_rubric(template, manifest)
+
+    assert len(rubric.items) == 5
+    assert sum(item.max_points for item in rubric.items) == 100

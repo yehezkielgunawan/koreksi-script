@@ -1,7 +1,7 @@
 from collections.abc import Hashable
 import math
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, TypeVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -11,6 +11,7 @@ PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
 UnitFloat = Annotated[float, Field(ge=0, le=1)]
 PositiveUnitFloat = Annotated[float, Field(gt=0, le=1)]
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class _ConfigModel(BaseModel):
@@ -361,7 +362,7 @@ def _scaled_levels(
     return scaled
 
 
-def _load_model(path: Path, model: type[object], label: str) -> object:
+def _load_model(path: Path, model: type[ModelT], label: str) -> ModelT:
     try:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:

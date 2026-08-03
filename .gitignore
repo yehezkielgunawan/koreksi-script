@@ -27,6 +27,7 @@ ENV/
 results.json
 *.log
 results_v2.json
+results_v3.json
 *_review.json
 individual_results.json
 group_results.json

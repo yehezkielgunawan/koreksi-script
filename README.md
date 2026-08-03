@@ -1,6 +1,6 @@
 # Koreksi Script
 
-Auditable grading of student PDF, DOCX, and DOC submissions with a multimodal OpenRouter model. The unified `grader.py` CLI extracts text and visual evidence, validates structured model responses, calculates scores locally from YAML rubrics, and writes version-2 results with a separate human-review queue.
+Auditable grading of student PDF, DOCX, and DOC submissions with a multimodal OpenRouter model. The unified `grader.py` CLI extracts text and visual evidence, validates structured model responses, calculates scores locally from YAML rubrics, and writes version-3 results with a separate human-review queue.
 
 ## Requirements
 
@@ -29,19 +29,43 @@ The input path must be one `StudentAnswer*` directory or a parent containing suc
 
 ```text
 StudentAnswer_<COURSE>_<TYPE>_<ASSIGNMENT>_<DATE>/
+  assignment.yaml
+  Question.html
   <STUDENT_ID>_<STUDENT_NAME>/
     answer.pdf|answer.docx|answer.doc
-    Question.html
+    Question.html  # optional per-student override
 ```
 
-Only one supported answer document is accepted per student. Files whose names contain `question`, `soal`, `pertanyaan`, `attachment`, `ai_usage`, `ai form`, or `declaration` are excluded from answer discovery. `Question.html` is optional, but its absence is reported for review.
+Only one supported answer document is accepted per student. Files whose names contain `question`, `soal`, `pertanyaan`, `attachment`, `ai_usage`, `ai form`, or `declaration` are excluded from answer discovery. The grader uses the student-level `Question.html` first, then the assignment-root file. Missing or ambiguous question statements are sent to review.
 
 ## Rubrics
 
-Rubrics are strict YAML files validated with Pydantic. The repository includes:
+Rubrics are strict shared YAML templates validated with Pydantic. The repository includes:
 
-- `rubrics/individual.yaml` for 100-point individual essays with question weights `25/35/40`.
-- `rubrics/group.yaml` for 100-point group-paper background review.
+- `rubrics/individual.yaml` for reusable individual-answer criteria.
+- `rubrics/group.yaml` for reusable group-paper criteria.
+
+Each `StudentAnswer*` directory must include an `assignment.yaml` manifest. The manifest declares the weekly question IDs, labels, and point weights. Its question points must sum exactly to `100`; the model never decides the point structure.
+
+Example manifest:
+
+```yaml
+schema_version: 1
+assignment:
+  id: week-04
+  title: Weekly Assignment 4
+  total_points: 100
+questions:
+  - id: question_1
+    label: Question 1
+    max_points: 20
+  - id: question_2
+    label: Question 2
+    max_points: 30
+  - id: question_3
+    label: Question 3
+    max_points: 50
+```
 
 Validate a rubric before grading:
 
@@ -58,7 +82,7 @@ Preview discovery, document conversion, page rendering, and rubric selection wit
 uv run grader.py grade \
   --rubric rubrics/individual.yaml \
   --input /path/to/submissions \
-  --output results_v2.json \
+  --output results_v3.json \
   --dry-run
 ```
 
@@ -68,7 +92,7 @@ Run grading after the dry run succeeds:
 uv run grader.py grade \
   --rubric rubrics/individual.yaml \
   --input /path/to/submissions \
-  --output results_v2.json
+  --output results_v3.json
 ```
 
 Force a single student's submission to be graded again, bypassing the exact result cache:
@@ -78,14 +102,14 @@ uv run grader.py regrade \
   --student-id 2902737810 \
   --rubric rubrics/individual.yaml \
   --input /path/to/submissions \
-  --output results_v2.json
+  --output results_v3.json
 ```
 
 The `--model`, `--visual-prompt`, and `--grading-prompt` options can override their defaults when testing a controlled configuration.
 
 ## Results and Review
 
-The default result file is `results_v2.json`. Results use schema version 2 and contain a fingerprint covering the source document, normalized PDF, question, rubric, prompts, model, extractor, and schema version. Existing results are reused only when the complete fingerprint matches.
+The default result file is `results_v3.json`. Results use schema version 3 and contain a fingerprint covering the source document, normalized PDF, question, shared rubric, weekly manifest, prompts, model, extractor, and schema version. Existing results are reused only when the complete fingerprint matches.
 
 Each record has one of these statuses:
 
@@ -93,7 +117,9 @@ Each record has one of these statuses:
 - `needs_review`: grading completed with an ambiguity or evidence issue, or preprocessing could not produce a reliable document.
 - `error`: processing failed and the error is persisted for investigation.
 
-Review records are also written to `results_v2_review.json`. Review flags include unreadable evidence, missing or ambiguous answers, conversion failures, invalid evidence references, and insufficient text or visual evidence. Scores are never calculated by the model; the application calculates them after response validation.
+Review records are also written to `results_v3_review.json`. Review flags include unreadable evidence, missing or ambiguous answers, conversion failures, invalid evidence references, and insufficient text or visual evidence. Scores are never calculated by the model; the application calculates them after response validation.
+
+The final `total_score` is always an integer from `0` through `100`. Item percentages are also reported from `0` through `100`.
 
 Retired output filenames are rejected to prevent accidental mixing of incompatible schemas.
 
@@ -101,6 +127,7 @@ Retired output filenames are rejected to prevent accidental mixing of incompatib
 
 - `OPENROUTER_API_KEY is required`: set the key in `.env` or the shell environment.
 - `LibreOffice is required`: install LibreOffice before grading DOC or DOCX files; PDF-only dry runs do not require it.
+- `assignment manifest not found`: add a strict `assignment.yaml` to the `StudentAnswer*` root or the affected student folder.
 - `no student submissions found`: check that the input contains directories beginning with `StudentAnswer` and student folders with supported documents.
 - A `needs_review` record is intentional. Inspect the separate review queue instead of treating it as an automatic pass or failure.
 

@@ -1,56 +1,50 @@
-schema_version: 1
-assignment:
-  id: group-paper-background
-  title: Group Paper Draft - Latar Belakang
-  total_points: 100
+schema_version: 2
+rubric:
+  id: group
   feedback_language: id
   overall_feedback_below: 80
-items:
-  - id: background_section
-    label: Latar Belakang
-    max_points: 100
-    criteria:
-      - id: background_context
-        description: Kejelasan konteks dan latar masalah yang diperkenalkan.
-        max_points: 25
-        required_evidence: Deskripsi konteks, kondisi awal, dan ruang lingkup masalah.
-        levels:
-          - score: 0
-            description: Konteks tidak ada atau tidak berkaitan dengan topik.
-          - score: 12
-            description: Konteks dasar tersedia tetapi masih umum atau kurang lengkap.
-          - score: 25
-            description: Konteks spesifik, lengkap, dan langsung mengarahkan pembaca pada masalah.
-      - id: background_problem
-        description: Ketajaman perumusan masalah dan urgensinya.
-        max_points: 25
-        required_evidence: Pernyataan masalah, dampak, dan alasan mengapa masalah perlu dibahas.
-        levels:
-          - score: 0
-            description: Masalah tidak dirumuskan atau tidak didukung argumen.
-          - score: 12
-            description: Masalah dirumuskan tetapi urgensi atau dampaknya belum jelas.
-          - score: 25
-            description: Masalah dan urgensinya dirumuskan secara spesifik dan meyakinkan.
-      - id: background_evidence
-        description: Relevansi dan kecukupan data, sumber, atau contoh pendukung.
-        max_points: 25
-        required_evidence: Data, referensi, contoh, atau fakta yang mendukung klaim utama.
-        levels:
-          - score: 0
-            description: Tidak ada bukti pendukung atau bukti tidak relevan.
-          - score: 12
-            description: Bukti pendukung ada tetapi terbatas, umum, atau belum terhubung dengan klaim.
-          - score: 25
-            description: Bukti relevan dan cukup untuk mendukung klaim utama secara meyakinkan.
-      - id: background_coherence
-        description: Koherensi alur argumentasi dari konteks menuju tujuan atau arah paper.
-        max_points: 25
-        required_evidence: Transisi logis, hubungan antarparagraf, dan tujuan pembahasan.
-        levels:
-          - score: 0
-            description: Alur argumentasi tidak koheren atau tidak mengarah pada tujuan paper.
-          - score: 12
-            description: Alur dapat diikuti tetapi masih ada lompatan logika atau bagian berulang.
-          - score: 25
-            description: Alur logis, konsisten, dan mengantar pembaca dengan jelas ke tujuan paper.
+criteria:
+  - id: context
+    weight: 0.25
+    description: Menjelaskan konteks dan latar masalah secara spesifik.
+    required_evidence: Kondisi awal, ruang lingkup, dan konteks masalah.
+    levels:
+      - fraction: 0.0
+        description: Konteks tidak ada atau tidak relevan.
+      - fraction: 0.5
+        description: Konteks dasar ada tetapi masih umum atau tidak lengkap.
+      - fraction: 1.0
+        description: Konteks spesifik, lengkap, dan relevan.
+  - id: problem
+    weight: 0.25
+    description: Merumuskan masalah dan menjelaskan urgensinya.
+    required_evidence: Pernyataan masalah, dampak, dan alasan pembahasan.
+    levels:
+      - fraction: 0.0
+        description: Masalah tidak dirumuskan.
+      - fraction: 0.5
+        description: Masalah dirumuskan tetapi urgensinya belum jelas.
+      - fraction: 1.0
+        description: Masalah dan urgensinya dirumuskan dengan meyakinkan.
+  - id: evidence
+    weight: 0.25
+    description: Menggunakan sumber, data, atau contoh yang mendukung.
+    required_evidence: Fakta, referensi, data, atau contoh yang dapat ditelusuri.
+    levels:
+      - fraction: 0.0
+        description: Tidak ada bukti pendukung yang relevan.
+      - fraction: 0.5
+        description: Bukti ada tetapi terbatas atau kurang terhubung.
+      - fraction: 1.0
+        description: Bukti relevan dan cukup untuk mendukung klaim utama.
+  - id: coherence
+    weight: 0.25
+    description: Menyusun alur argumentasi menuju tujuan paper.
+    required_evidence: Transisi logis, hubungan antarparagraf, dan arah pembahasan.
+    levels:
+      - fraction: 0.0
+        description: Argumentasi tidak koheren atau tidak memiliki arah.
+      - fraction: 0.5
+        description: Alur dapat diikuti tetapi masih memiliki lompatan logika.
+      - fraction: 1.0
+        description: Alur logis, konsisten, dan mengarah jelas pada tujuan paper.
