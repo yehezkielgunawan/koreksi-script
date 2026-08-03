@@ -8,7 +8,7 @@ from grader_core.documents import extract_html_blocks
 
 
 class QuestionMappingError(ValueError):
-    """Raised when question HTML cannot be mapped to a manifest."""
+    """Raised when question HTML cannot be mapped to catalog questions."""
 
 
 @dataclass(frozen=True)
@@ -83,9 +83,9 @@ def extract_question_sections(
     html: str,
     questions: Sequence[QuestionTarget],
 ) -> tuple[QuestionSection, ...]:
-    """Map visible HTML sections to manifest questions without guessing."""
+    """Map visible HTML sections to catalog questions without guessing."""
     if not questions:
-        raise QuestionMappingError("manifest contains no questions")
+        raise QuestionMappingError("catalog contains no questions")
 
     parser = _VisibleQuestionParser()
     parser.feed(html)

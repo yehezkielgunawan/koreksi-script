@@ -46,7 +46,7 @@ assignments:
                 description: Complete
 """
 
-VALID_MANIFEST = """\
+VALID_SELECTOR = """\
 schema_version: 1
 assignment:
   id: week-01
@@ -98,7 +98,7 @@ def _write_catalog(tmp_path: Path, content: str = VALID_RUBRIC) -> Path:
     return path
 
 
-def _write_manifest(assignment_root: Path, content: str = VALID_MANIFEST) -> Path:
+def _write_selector(assignment_root: Path, content: str = VALID_SELECTOR) -> Path:
     path = assignment_root / "assignment.yaml"
     path.write_text(content, encoding="utf-8")
     return path
@@ -126,7 +126,7 @@ def test_grade_dry_run_discovers_and_normalizes_without_api_client(
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
     shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
-    _write_manifest(assignment_root)
+    _write_selector(assignment_root)
     output_path = tmp_path / "results_v3.json"
 
     def fail_if_initialized(*_args: object, **_kwargs: object) -> None:
@@ -164,7 +164,7 @@ def test_grade_writes_a_versioned_result_without_network_access(
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
     shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
-    _write_manifest(assignment_root)
+    _write_selector(assignment_root)
     (student_folder / "Question.html").write_text(
         "<p>Explain the answer.</p>", encoding="utf-8"
     )
@@ -229,7 +229,7 @@ def test_grade_writes_a_versioned_result_without_network_access(
     assert all(0 <= value <= 100 for value in document.results[0].grade.item_percentages.values())
 
 
-def test_grade_dry_run_uses_dynamic_manifest_questions(
+def test_grade_dry_run_uses_dynamic_catalog_questions(
     tmp_path: Path,
     synthetic_pdf_files: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -240,9 +240,9 @@ def test_grade_dry_run_uses_dynamic_manifest_questions(
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
     shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
-    _write_manifest(
+    _write_selector(
         assignment_root,
-        VALID_MANIFEST.replace("week-01", "week-dynamic"),
+        VALID_SELECTOR.replace("week-01", "week-dynamic"),
     )
     (assignment_root / "Question.html").write_text(
         "<h2>Question 1</h2><p>First statement.</p>"
@@ -274,14 +274,14 @@ def test_grade_dry_run_uses_dynamic_manifest_questions(
     assert "dry run" in capsys.readouterr().out.lower()
 
 
-def test_grade_requires_assignment_manifest_before_api(
+def test_grade_requires_assignment_selector_before_api(
     tmp_path: Path,
     synthetic_pdf_files: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     rubric_path = _write_catalog(tmp_path)
-    assignment_root = tmp_path / "StudentAnswer_NO_MANIFEST"
+    assignment_root = tmp_path / "StudentAnswer_NO_SELECTOR"
     student_folder = assignment_root / "123_TEST STUDENT"
     student_folder.mkdir(parents=True)
     shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")

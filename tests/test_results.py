@@ -113,7 +113,7 @@ def test_results_document_rejects_version_two() -> None:
 def test_result_store_saves_atomically_and_loads_exact_cache(
     tmp_path: Path,
 ) -> None:
-    output_path = tmp_path / "results_v2.json"
+    output_path = tmp_path / "results_v3.json"
     review_path = tmp_path / "review_queue.json"
     store = ResultStore(output_path, review_path)
     record = _record()
@@ -124,13 +124,13 @@ def test_result_store_saves_atomically_and_loads_exact_cache(
     assert loaded.results == [record]
     assert store.find_cached(record.file_path, record.fingerprint) == record
     assert store.find_cached(record.file_path, _fingerprint(source_sha256="new")) is None
-    assert not list(tmp_path.glob(".results_v2.json.*.tmp"))
+    assert not list(tmp_path.glob(".results_v3.json.*.tmp"))
 
 
 def test_result_store_replaces_same_file_and_keeps_review_queue_separate(
     tmp_path: Path,
 ) -> None:
-    output_path = tmp_path / "results_v2.json"
+    output_path = tmp_path / "results_v3.json"
     review_path = tmp_path / "review_queue.json"
     store = ResultStore(output_path, review_path)
     first = _record()
@@ -149,7 +149,7 @@ def test_result_store_replaces_same_file_and_keeps_review_queue_separate(
 def test_result_store_preserves_existing_file_if_atomic_replace_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    output_path = tmp_path / "results_v2.json"
+    output_path = tmp_path / "results_v3.json"
     store = ResultStore(output_path)
     first = _record()
     store.save_result(first)

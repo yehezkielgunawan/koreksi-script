@@ -17,7 +17,7 @@ def _questions() -> list[SimpleNamespace]:
     ]
 
 
-def test_extract_question_sections_maps_manifest_questions() -> None:
+def test_extract_question_sections_maps_catalog_questions() -> None:
     html = """
     <h2>Question 1</h2><p>Explain governance.</p>
     <h2>Question 2</h2><p>Apply the framework.</p>
