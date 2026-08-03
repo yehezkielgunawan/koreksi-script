@@ -76,4 +76,4 @@ The migration is complete only when all of the following pass:
 - `uv run python grader.py validate --rubric rubrics/individual.yaml`
 - `uv run python grader.py validate --rubric rubrics/group.yaml`
 - A temporary synthetic-submission dry run completes without an API client or result file.
-- The final Git diff contains no references to removed legacy entry points, prompts, or output snapshots outside the migration history/specification.
+- The final Git diff contains no references to removed legacy entry points or prompt files, and no checked-in legacy output snapshots. Intentional guard references to retired output names in `grader.py`, tests, and `.gitignore` are allowed because they prevent accidental overwrites.
