@@ -1,66 +1,58 @@
-# Koreksi Script — Student Assignment Checker
+# Koreksi Script - Student Assignment Checker
 
-Automated scoring of student assignments (PDF/DOCX) using LLM APIs.
+Automated, auditable scoring of student PDF, DOCX, and DOC assignments using a multimodal OpenRouter model.
 
 ## Architecture
 
-Two independent scripts, each with its own API and prompt file:
+`grader.py` is the only supported entry point. It orchestrates these modules:
 
-| Script | Purpose | API | Prompt File | Output |
-|---|---|---|---|---|
-| `main.py` | Individual assignments | OpenRouter (OpenAI-compatible, model: `nvidia/nemotron-3-super-120b-a12b:free`) | `Individual_Prompts.md` | `individual_results.json` |
-| `group_review.py` | Group assignments | Google Gemini (`gemini-2.5-flash`) | `Group_Prompts.md` | `group_results.json` |
+| Module | Responsibility |
+|---|---|
+| `grader_core/config.py` | Strict YAML rubric models and validation |
+| `grader_core/documents.py` | Submission discovery, HTML extraction, normalization, diagnostics, and page rendering |
+| `grader_core/grading.py` | Structured response schemas, evidence validation, and deterministic score calculation |
+| `grader_core/openrouter.py` | OpenRouter structured text and multimodal requests |
+| `grader_core/results.py` | Fingerprinted version-2 results, atomic writes, cache, and review queue |
+| `grader.py` | CLI preflight and end-to-end orchestration |
+| `rubrics/` | Individual and group YAML scoring criteria |
+| `prompts/` | Visual evidence and grading system prompts |
 
 ## Commands
 
 ```bash
-# Install dependencies
 uv sync
-
-# Run individual checker
-uv run main.py                # normal
-uv run main.py --debug        # debug logging + raw API responses in output
-uv run main.py --re-review    # re-grade students scoring below 80
-
-# Run group checker
-uv run group_review.py
+uv run grader.py validate --rubric rubrics/individual.yaml
+uv run grader.py validate --rubric rubrics/group.yaml
+uv run grader.py grade --rubric rubrics/individual.yaml --input /path/to/submissions --output results_v2.json --dry-run
+uv run grader.py grade --rubric rubrics/individual.yaml --input /path/to/submissions --output results_v2.json
+uv run grader.py regrade --student-id <ID> --rubric rubrics/individual.yaml --input /path/to/submissions --output results_v2.json
 ```
 
-No tests, linter, or CI exist. There is no build step.
+Dry runs perform discovery, rubric validation, document conversion, and page rendering without initializing the API client or writing results. `regrade` bypasses the exact fingerprint cache for one student.
 
 ## Environment
 
-- **Python 3.13** (see `.python-version`), managed with **`uv`**
-- `.env` requires: `OPENROUTER_API_KEY` and `GOOGLE_API_KEY`
-- **Never commit `.env`** — it contains live API keys and is in `.gitignore`
+- Python 3.13, managed with `uv`.
+- `.env` requires `OPENROUTER_API_KEY` for `grade` and `regrade`.
+- `.env` is ignored and must never be committed.
+- LibreOffice is required when grading DOC or DOCX files.
+- The default model is `google/gemma-4-26b-a4b-it:free`; the CLI accepts `--model`.
 
-## Key Gotchas
+## Key Behavior
 
-- **`group_review.py` depends on `google-generativeai`** which is NOT in `pyproject.toml` or `requirements.txt`. Install manually: `uv pip install google-generativeai`
-- **Scoring config is parsed dynamically** from the prompt file via regex (`Question N: [score]/MAX`). Changing prompt format without updating regex patterns in `parse_scoring_config_from_prompt()` will silently break scoring.
-- **Prompt extraction** starts from the first line beginning with `"This is my student"` in the prompt `.md` file. Content above that line is ignored.
-- **`.doc` extraction** uses macOS `textutil` — will fail on non-macOS without fallback.
-- **Free OpenRouter models** (`:free` suffix) are rate-limited to 20 RPM; the script enforces a 3s delay between requests. Paid models skip the local throttle.
-- **Results are saved incrementally** after each student — safe to interrupt and resume; already-scored students are skipped.
-- **File discovery**: only scans `StudentAnswer*` directories. Files with keywords `question`, `soal`, `pertanyaan`, `attachment`, `ai_usage`, `ai form`, `declaration` in the filename are skipped.
+- Rubrics are strict YAML and must have matching criterion, item, and assignment totals.
+- The model returns evidence and criterion assessments; Python calculates totals and selects the weakest item.
+- Results are saved atomically after each submission and skipped only when the complete fingerprint matches.
+- `needs_review` records are persisted separately in `results_v2_review.json`.
+- Missing, ambiguous, unreadable, or failed-conversion submissions are not silently graded.
+- Only `StudentAnswer*` directories are scanned. Known question, attachment, declaration, and AI-usage filenames are excluded from answer discovery.
+- Retired output names are rejected to prevent mixing old and version-2 schemas.
 
-## Using MCPs with This Project
+## Testing
 
-- **Context7**: Use for looking up `openai` Python SDK, `PyPDF2`, `python-docx`, `google-generativeai`, or `pydantic` API docs when modifying API calls or parsing logic.
-- **Serena**: Configured for Python LSP. Use `serena_find_symbol`, `serena_find_referencing_symbols`, etc. for navigating the codebase (e.g., tracing how `ScoringConfig` flows through parsing and grading).
-
-## Student File Path Pattern
-
-```
-StudentAnswer_<COURSE>_<TYPE>_<ASSIGNMENT>_<DATE>/
-  <STUDENT_ID>_<STUDENT_NAME>/
-    <answer_file>.pdf|.docx|.doc
+```bash
+uv run pytest -q
+uv run python -m compileall -q grader.py grader_core tests
 ```
 
-Example: `StudentAnswer_ISYS6599038_DFEA_LEC_Personal_Assignment_2_19.01.2026.19.16/2902737810_LUK SEKAR DADARI/TP2-ISYS6599 – MIS for Leader 2025_LUK SEKAR DADARI_2902737810.pdf`
-
-## Prompt Customization
-
-- Edit `Individual_Prompts.md` or `Group_Prompts.md` to change grading criteria, questions, and scoring.
-- The number of questions is dynamic — add/remove `Question N: [score]/MAX` lines in the prompt and the script adapts.
-- Feedback is always expected in **Bahasa Indonesia**.
+There is no live-API test in the suite. CLI integration tests use a local fake client, and dry-run tests verify that no API client is initialized.

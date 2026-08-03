@@ -1,69 +1,112 @@
 # Koreksi Script
 
-A Python tool to automatically review and score student essays in PDF or DOCX format using Google Gemini (Gemini API).
+Auditable grading of student PDF, DOCX, and DOC submissions with a multimodal OpenRouter model. The unified `grader.py` CLI extracts text and visual evidence, validates structured model responses, calculates scores locally from YAML rubrics, and writes version-2 results with a separate human-review queue.
 
-## Quick Start
+## Requirements
 
-### 1. Clone the repository
-```sh
-git clone <your-repo-url>
-cd koreksi-script
+- Python 3.13
+- [`uv`](https://docs.astral.sh/uv/)
+- LibreOffice for DOC and DOCX conversion
+- An OpenRouter API key
+
+## Setup
+
+```bash
+uv sync
 ```
 
-### 2. Set up your environment
+Create a local `.env` file, which is ignored by Git:
 
-#### Using a virtual environment (recommended)
-```sh
-python3 -m venv .venv
-source .venv/bin/activate
+```dotenv
+OPENROUTER_API_KEY=your_openrouter_api_key
 ```
 
-#### Or, using [uv](https://github.com/astral-sh/uv) (fast Python package manager)
-```sh
-uv venv .venv
-source .venv/bin/activate
+The default model is `google/gemma-4-26b-a4b-it:free`. Pass `--model` to select another OpenRouter model. Free endpoints can be rate-limited and have provider privacy tradeoffs; the CLI prints a warning when one is selected.
+
+## Input Layout
+
+The input path must be one `StudentAnswer*` directory or a parent containing such directories:
+
+```text
+StudentAnswer_<COURSE>_<TYPE>_<ASSIGNMENT>_<DATE>/
+  <STUDENT_ID>_<STUDENT_NAME>/
+    answer.pdf|answer.docx|answer.doc
+    Question.html
 ```
 
-### 3. Install dependencies
-```sh
-pip install -r requirements.txt
-```
-Or, with uv:
-```sh
-uv pip install -r requirements.txt
-```
+Only one supported answer document is accepted per student. Files whose names contain `question`, `soal`, `pertanyaan`, `attachment`, `ai_usage`, `ai form`, or `declaration` are excluded from answer discovery. `Question.html` is optional, but its absence is reported for review.
 
-### 4. Set up your API key
-- Copy `.env.example` to `.env` and add your Google Gemini API key:
-  ```
-  GOOGLE_API_KEY=your_actual_gemini_api_key
-  ```
+## Rubrics
 
-### 5. Add your student PDF and/or DOCX files
-- Place all files to be reviewed in the project directory.
+Rubrics are strict YAML files validated with Pydantic. The repository includes:
 
-### 6. Run the script
-```sh
-python main.py
-```
-Or, with uv:
-```sh
-uv run main.py
+- `rubrics/individual.yaml` for 100-point individual essays with question weights `25/35/40`.
+- `rubrics/group.yaml` for 100-point group-paper background review.
+
+Validate a rubric before grading:
+
+```bash
+uv run grader.py validate --rubric rubrics/individual.yaml
+uv run grader.py validate --rubric rubrics/group.yaml
 ```
 
-### 7. View results
-- The results will be saved in `results.json` in structured format.
+## Commands
 
-## Notes
-- The script uses the Gemini API to review and score each essay.
-- The prompt and output structure can be customized in the `.rules` file.
-- Make sure your `.env` file is **not** committed to git (it's already in `.gitignore`).
+Preview discovery, document conversion, page rendering, and rubric selection without credentials or API requests:
+
+```bash
+uv run grader.py grade \
+  --rubric rubrics/individual.yaml \
+  --input /path/to/submissions \
+  --output results_v2.json \
+  --dry-run
+```
+
+Run grading after the dry run succeeds:
+
+```bash
+uv run grader.py grade \
+  --rubric rubrics/individual.yaml \
+  --input /path/to/submissions \
+  --output results_v2.json
+```
+
+Force a single student's submission to be graded again, bypassing the exact result cache:
+
+```bash
+uv run grader.py regrade \
+  --student-id 2902737810 \
+  --rubric rubrics/individual.yaml \
+  --input /path/to/submissions \
+  --output results_v2.json
+```
+
+The `--model`, `--visual-prompt`, and `--grading-prompt` options can override their defaults when testing a controlled configuration.
+
+## Results and Review
+
+The default result file is `results_v2.json`. Results use schema version 2 and contain a fingerprint covering the source document, normalized PDF, question, rubric, prompts, model, extractor, and schema version. Existing results are reused only when the complete fingerprint matches.
+
+Each record has one of these statuses:
+
+- `graded`: the response was valid and no review reason was raised.
+- `needs_review`: grading completed with an ambiguity or evidence issue, or preprocessing could not produce a reliable document.
+- `error`: processing failed and the error is persisted for investigation.
+
+Review records are also written to `results_v2_review.json`. Review flags include unreadable evidence, missing or ambiguous answers, conversion failures, invalid evidence references, and insufficient text or visual evidence. Scores are never calculated by the model; the application calculates them after response validation.
+
+Retired output filenames are rejected to prevent accidental mixing of incompatible schemas.
 
 ## Troubleshooting
-- If you see errors about missing dependencies, make sure your virtual environment is activated and all requirements are installed.
-- If you see errors about the API key, double-check your `.env` file and that the key is valid.
-- For best results, use Python 3.10 or 3.11.
 
----
+- `OPENROUTER_API_KEY is required`: set the key in `.env` or the shell environment.
+- `LibreOffice is required`: install LibreOffice before grading DOC or DOCX files; PDF-only dry runs do not require it.
+- `no student submissions found`: check that the input contains directories beginning with `StudentAnswer` and student folders with supported documents.
+- A `needs_review` record is intentional. Inspect the separate review queue instead of treating it as an automatic pass or failure.
 
-Feel free to open issues or PRs for improvements!
+Run the full verification suite with:
+
+```bash
+uv run pytest -q
+uv run python -m compileall -q grader.py grader_core tests
+```
