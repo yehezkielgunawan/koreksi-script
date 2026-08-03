@@ -102,7 +102,7 @@ uv run grader.py regrade \
   --output results_v3.json
 ```
 
-The `--model`, `--visual-prompt`, and `--grading-prompt` options can override their defaults when testing a controlled configuration.
+The `--model`, `--request-timeout`, `--visual-prompt`, and `--grading-prompt` options can override their defaults when testing a controlled configuration. Each model request has a 180-second timeout by default and is retried once for transient failures. Visual evidence requests send at most four page images at a time. Grading prints progress before and after each slow document or model operation, and continues to the next submission when a submission records an `error`.
 
 ## Results and Review
 
@@ -126,6 +126,7 @@ Retired output filenames are rejected to prevent accidental mixing of incompatib
 - `LibreOffice is required`: install LibreOffice before grading DOC or DOCX files; PDF-only dry runs do not require it.
 - `assignment selector not found`: add a strict `assignment.yaml` with an assignment ID to the `StudentAnswer*` root or affected student folder when the catalog contains multiple assignments.
 - `no student submissions found`: check that the input contains directories beginning with `StudentAnswer` and student folders with supported documents.
+- `request_timeout_seconds must be a finite positive number`: set `--request-timeout` to a number greater than zero; the default is 180 seconds.
 - A `needs_review` record is intentional. Inspect the separate review queue instead of treating it as an automatic pass or failure.
 
 Run the full verification suite with:

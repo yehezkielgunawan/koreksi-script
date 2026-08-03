@@ -303,11 +303,11 @@ def test_table_and_excessive_drawing_pages_are_selected(tmp_path: Path) -> None:
     )
 
 
-def test_visual_pages_are_chunked_by_eight() -> None:
-    assert chunk_visual_pages(range(1, 18)) == (
-        tuple(range(1, 9)),
-        tuple(range(9, 17)),
-        (17,),
+def test_visual_pages_are_chunked_by_four() -> None:
+    assert chunk_visual_pages(range(1, 10)) == (
+        (1, 2, 3, 4),
+        (5, 6, 7, 8),
+        (9,),
     )
 
 

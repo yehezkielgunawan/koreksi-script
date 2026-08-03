@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import sys
 import time
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -23,8 +24,9 @@ from grader_core.grading import (
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
-DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_MAX_ATTEMPTS = 2
 DEFAULT_RETRY_BASE_SECONDS = 2.0
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 180.0
 
 
 class InvalidModelResponseError(RuntimeError):
@@ -54,23 +56,32 @@ class OpenRouterClient:
         client: Any | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         retry_base_seconds: float = DEFAULT_RETRY_BASE_SECONDS,
+        request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         if retry_base_seconds < 0:
             raise ValueError("retry_base_seconds must be non-negative")
+        if request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive")
 
         if client is None:
             resolved_api_key = api_key or os.getenv("OPENROUTER_API_KEY")
             if not resolved_api_key:
                 raise ValueError("OPENROUTER_API_KEY is required")
-            client = OpenAI(base_url=OPENROUTER_BASE_URL, api_key=resolved_api_key)
+            client = OpenAI(
+                base_url=OPENROUTER_BASE_URL,
+                api_key=resolved_api_key,
+                timeout=request_timeout_seconds,
+                max_retries=0,
+            )
 
         self._client = client
         self.model = model
         self.max_attempts = max_attempts
         self.retry_base_seconds = retry_base_seconds
+        self.request_timeout_seconds = request_timeout_seconds
         self._sleep = sleep
         self.last_metadata: RequestMetadata | None = None
 
@@ -205,7 +216,15 @@ class OpenRouterClient:
             except Exception as exc:
                 if not _is_retryable(exc) or attempt == self.max_attempts - 1:
                     raise
-                self._sleep(self.retry_base_seconds * (2**attempt))
+                delay = self.retry_base_seconds * (2**attempt)
+                print(
+                    f"OpenRouter request failed on attempt {attempt + 1}/"
+                    f"{self.max_attempts} ({type(exc).__name__}: {exc}); "
+                    f"retrying in {delay:.1f}s.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                self._sleep(delay)
 
         raise RuntimeError("unreachable retry state")
 

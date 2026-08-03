@@ -195,6 +195,7 @@ def test_grade_writes_a_versioned_result_without_network_access(
     tmp_path: Path,
     synthetic_pdf_files: dict[str, Path],
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     rubric_path = _write_catalog(tmp_path)
     assignment_root = tmp_path / "StudentAnswer_CLI"
@@ -206,10 +207,11 @@ def test_grade_writes_a_versioned_result_without_network_access(
         "<p>Explain the answer.</p>", encoding="utf-8"
     )
     output_path = tmp_path / "results_v3.json"
+    client_kwargs: dict[str, object] = {}
 
     class FakeClient:
-        def __init__(self, **_kwargs: object) -> None:
-            pass
+        def __init__(self, **kwargs: object) -> None:
+            client_kwargs.update(kwargs)
 
         def extract_visual_evidence(
             self, _prompt: str, pages: list[object]
@@ -255,15 +257,150 @@ def test_grade_writes_a_versioned_result_without_network_access(
             str(assignment_root),
             "--output",
             str(output_path),
+            "--request-timeout",
+            "90",
         ]
     )
 
     assert exit_code == 0
+    assert client_kwargs["request_timeout_seconds"] == 90
     document = ResultsDocument.model_validate_json(output_path.read_text())
     assert document.results[0].status == "graded"
     assert document.results[0].grade is not None
     assert document.results[0].grade.total_score == 100
     assert all(0 <= value <= 100 for value in document.results[0].grade.item_percentages.values())
+    output = capsys.readouterr().out
+    assert "[1/1] TEST STUDENT: normalizing document" in output
+    assert "[1/1] TEST STUDENT: visual chunk 1/1, pages 1" in output
+    assert "[1/1] TEST STUDENT: visual chunk 1/1 completed in" in output
+    assert "[1/1] TEST STUDENT: requesting final grade" in output
+
+
+@pytest.mark.parametrize("request_timeout", ["0", "-1"])
+def test_grade_rejects_non_positive_request_timeout(
+    tmp_path: Path,
+    synthetic_pdf_files: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    request_timeout: str,
+) -> None:
+    rubric_path = _write_catalog(tmp_path)
+    assignment_root = tmp_path / "StudentAnswer_TIMEOUT"
+    student_folder = assignment_root / "123_TEST STUDENT"
+    student_folder.mkdir(parents=True)
+    shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
+    _write_selector(assignment_root)
+    (student_folder / "Question.html").write_text(
+        "<p>Explain the answer.</p>", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "grader.OpenRouterClient",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid timeout must fail in preflight"
+        ),
+    )
+
+    exit_code = main(
+        [
+            "grade",
+            "--rubric",
+            str(rubric_path),
+            "--input",
+            str(assignment_root),
+            "--output",
+            str(tmp_path / "results_v3.json"),
+            "--request-timeout",
+            request_timeout,
+        ]
+    )
+
+    assert exit_code == 2
+    assert "request_timeout_seconds" in capsys.readouterr().err
+
+
+def test_grade_persists_timeout_error_and_continues_to_next_submission(
+    tmp_path: Path,
+    synthetic_pdf_files: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rubric_path = _write_catalog(tmp_path)
+    assignment_root = tmp_path / "StudentAnswer_TIMEOUT_CONTINUE"
+    for student_folder_name in ("123_FIRST STUDENT", "456_SECOND STUDENT"):
+        student_folder = assignment_root / student_folder_name
+        student_folder.mkdir(parents=True)
+        shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
+        (student_folder / "Question.html").write_text(
+            "<p>Explain the answer.</p>", encoding="utf-8"
+        )
+    _write_selector(assignment_root)
+    output_path = tmp_path / "results_v3.json"
+    grade_calls = 0
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def extract_visual_evidence(
+            self, _prompt: str, pages: list[object]
+        ) -> VisualEvidenceResponse:
+            return VisualEvidenceResponse(
+                evidence=[
+                    VisualEvidenceItem(
+                        page=getattr(page, "page_number"),
+                        description="Bukti terlihat jelas.",
+                        readability="clear",
+                    )
+                    for page in pages
+                ]
+            )
+
+        def request_grade(
+            self, _prompt: str, _evidence: object
+        ) -> GradingResponse:
+            nonlocal grade_calls
+            grade_calls += 1
+            if grade_calls == 1:
+                raise TimeoutError("request timed out")
+            return GradingResponse(
+                assessments=[
+                    CriterionAssessment(
+                        item_id="question_1",
+                        criterion_id="question_1_criterion",
+                        selected_score=100,
+                        rationale="Jawaban didukung bukti.",
+                        evidence=[EvidenceCitation(page=1, quote="Jawaban normal")],
+                        readability="clear",
+                    )
+                ],
+                item_feedback={"question_1": "Jawaban sudah baik."},
+                overall_feedback="Pertahankan kualitas jawaban.",
+            )
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("grader.OpenRouterClient", FakeClient)
+
+    exit_code = main(
+        [
+            "grade",
+            "--rubric",
+            str(rubric_path),
+            "--input",
+            str(assignment_root),
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    document = ResultsDocument.model_validate_json(output_path.read_text())
+    records = {record.student_id: record for record in document.results}
+    assert records["123"].status == "error"
+    assert records["123"].error == "request timed out"
+    assert records["456"].status == "graded"
+    output = capsys.readouterr().out
+    assert "[1/2] FIRST STUDENT: requesting final grade" in output
+    assert "[2/2] SECOND STUDENT: requesting final grade" in output
 
 
 def test_grade_dry_run_uses_dynamic_catalog_questions(

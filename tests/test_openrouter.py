@@ -9,12 +9,16 @@ import pytest
 PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import grader_core.openrouter as openrouter
 from grader_core.documents import RenderedPage
 from grader_core.grading import (
     EvidencePackage,
     grading_response_schema,
 )
-from grader_core.openrouter import DEFAULT_MODEL, OpenRouterClient
+from grader_core.openrouter import (
+    DEFAULT_MODEL,
+    OpenRouterClient,
+)
 
 
 def _response(content: str, *, request_id: str = "req-1") -> SimpleNamespace:
@@ -54,6 +58,37 @@ def _fake_openai(outcomes: list[object]) -> tuple[SimpleNamespace, FakeCompletio
     completions = FakeCompletions(outcomes)
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     return client, completions
+
+
+def test_default_sdk_configuration_has_bounded_timeout_and_no_sdk_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(openrouter, "OpenAI", FakeOpenAI)
+
+    client = OpenRouterClient(api_key="test-key")
+
+    assert client.request_timeout_seconds == 180.0
+    assert client.max_attempts == 2
+    assert captured == {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": "test-key",
+        "timeout": 180.0,
+        "max_retries": 0,
+    }
+
+
+@pytest.mark.parametrize("timeout", [0, -1])
+def test_request_timeout_must_be_positive(timeout: float) -> None:
+    fake_client, _ = _fake_openai([])
+
+    with pytest.raises(ValueError, match="request_timeout_seconds"):
+        OpenRouterClient(client=fake_client, request_timeout_seconds=timeout)
 
 
 def test_visual_request_sends_text_before_base64_images_and_schema(
@@ -183,6 +218,39 @@ def test_transient_rate_limit_is_retried_with_backoff() -> None:
     assert result.evidence[0].page == 1
     assert len(completions.calls) == 2
     assert sleeps == [0.25]
+
+
+def test_timeout_is_retried_once_with_application_retry(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_client, completions = _fake_openai(
+        [
+            TimeoutError("request timed out"),
+            _response(
+                json.dumps(
+                    {
+                        "evidence": [
+                            {
+                                "page": 1,
+                                "transcription": "Text",
+                                "description": "Description",
+                                "readability": "clear",
+                            }
+                        ]
+                    }
+                )
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+    client = OpenRouterClient(client=fake_client, sleep=sleeps.append)
+
+    result = client.extract_visual_evidence("Prompt", ())
+
+    assert result.evidence[0].page == 1
+    assert len(completions.calls) == 2
+    assert sleeps == [2.0]
+    assert "retrying in 2.0s" in capsys.readouterr().err
 
 
 def test_invalid_json_gets_one_correction_request() -> None:

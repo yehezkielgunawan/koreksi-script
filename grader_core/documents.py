@@ -284,7 +284,7 @@ def select_visual_pages(
 
 
 def chunk_visual_pages(
-    page_numbers: Iterable[int], *, max_images: int = 8
+    page_numbers: Iterable[int], *, max_images: int = 4
 ) -> tuple[tuple[int, ...], ...]:
     """Split 1-indexed page numbers into bounded image-request chunks."""
     if max_images <= 0:

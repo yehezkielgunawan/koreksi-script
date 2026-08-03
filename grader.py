@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import math
 import os
 from pathlib import Path
 import re
 import shutil
 import sys
 import tempfile
+from time import monotonic
 
 from dotenv import load_dotenv
 
@@ -41,7 +43,7 @@ from grader_core import (
 )
 from grader_core.config import RubricCatalog, RubricConfig, RubricLoadError
 from grader_core.documents import NormalizedDocument
-from grader_core.openrouter import OpenRouterClient
+from grader_core.openrouter import DEFAULT_REQUEST_TIMEOUT_SECONDS, OpenRouterClient
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -129,6 +131,13 @@ def _add_grading_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", required=True, dest="input_root")
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        metavar="SECONDS",
+        help="maximum seconds allowed for each model request",
+    )
     parser.add_argument("--visual-prompt", default=str(DEFAULT_VISUAL_PROMPT))
     parser.add_argument("--grading-prompt", default=str(DEFAULT_GRADING_PROMPT))
 
@@ -168,6 +177,8 @@ def _preflight(
 
     if not str(args.model).strip():
         raise ValueError("model must be explicit and non-empty")
+    if not math.isfinite(args.request_timeout) or args.request_timeout <= 0:
+        raise ValueError("request_timeout_seconds must be a finite positive number")
     if str(args.model).endswith(":free"):
         print(
             "Warning: the selected free model endpoint may be rate-limited "
@@ -367,7 +378,10 @@ def _run_grading(
     grading_prompt = grading_prompt_path.read_text(encoding="utf-8")
     visual_prompt_version = _prompt_version(visual_prompt)
     grading_prompt_version = _prompt_version(grading_prompt)
-    client = OpenRouterClient(model=args.model)
+    client = OpenRouterClient(
+        model=args.model,
+        request_timeout_seconds=args.request_timeout,
+    )
     force = args.command == "regrade"
     graded_count = 0
     cached_count = 0
@@ -376,6 +390,13 @@ def _run_grading(
     for index, context in enumerate(contexts):
         submission = context.submission
         source_path = submission.answer_path or submission.folder
+        display_name = (
+            submission.student_name or submission.student_id or submission.folder.name
+        )
+
+        def report_progress(message: str) -> None:
+            _print_progress(index + 1, len(contexts), display_name, message)
+
         file_path = str(source_path)
         rubric_sha256 = _selected_rubric_sha256(
             context.rubric, context.selector.assignment.id
@@ -391,6 +412,7 @@ def _run_grading(
 
         if submission.answer_path is not None:
             try:
+                report_progress("normalizing document")
                 with tempfile.TemporaryDirectory(prefix=f"koreksi-{index}-") as temp:
                     normalized = normalize_document(submission.answer_path, Path(temp))
                     if isinstance(normalized, NormalizationFailure):
@@ -430,6 +452,7 @@ def _run_grading(
                                 visual_prompt,
                                 grading_prompt,
                                 client,
+                                report_progress,
                             )
             except Exception as exc:
                 record = ResultRecord(
@@ -470,6 +493,7 @@ def _grade_submission(
     visual_prompt: str,
     grading_prompt: str,
     client: OpenRouterClient,
+    report_progress: Callable[[str], None],
 ) -> ResultRecord:
     question_text = "\n\n".join(
         f"[{section.question_id}] {section.label}\n{section.text}"
@@ -484,16 +508,28 @@ def _grade_submission(
     with tempfile.TemporaryDirectory(prefix="koreksi-render-") as rendered_temp:
         selected_pages = select_visual_pages(normalized)
         if selected_pages:
+            report_progress(f"rendering {len(selected_pages)} visual page(s)")
             rendered_pages = render_visual_pages(
                 normalized.pdf_path,
                 selected_pages,
                 Path(rendered_temp),
             )
             rendered_by_page = {page.page_number: page for page in rendered_pages}
-            for page_chunk in chunk_visual_pages(selected_pages):
+            page_chunks = chunk_visual_pages(selected_pages)
+            for chunk_index, page_chunk in enumerate(page_chunks, start=1):
+                chunk_label = _format_page_range(page_chunk)
+                report_progress(
+                    f"visual chunk {chunk_index}/{len(page_chunks)}, "
+                    f"pages {chunk_label}"
+                )
+                request_started = monotonic()
                 response = client.extract_visual_evidence(
                     visual_prompt,
                     [rendered_by_page[page_number] for page_number in page_chunk],
+                )
+                report_progress(
+                    f"visual chunk {chunk_index}/{len(page_chunks)} completed "
+                    f"in {monotonic() - request_started:.1f}s"
                 )
                 validate_visual_evidence(response, len(normalized.pages))
                 visual_evidence.extend(response.evidence)
@@ -502,6 +538,8 @@ def _grade_submission(
     if not answer_text and not visual_evidence:
         review_reasons.append("no_text_or_visual_evidence")
 
+    report_progress("requesting final grade")
+    request_started = monotonic()
     response = client.request_grade(
         grading_prompt,
         EvidencePackage(
@@ -510,6 +548,7 @@ def _grade_submission(
             visual_evidence=visual_evidence,
         ),
     )
+    report_progress(f"final grade completed in {monotonic() - request_started:.1f}s")
     validate_grading_response(response, rubric, len(normalized.pages))
     calculated = calculate_grade(response, rubric)
     review_reasons.extend(calculated.review_reasons)
@@ -638,6 +677,35 @@ def _text_sha256(value: str) -> str:
 
 def _unique_strings(values: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(value for value in values if value))
+
+
+def _print_progress(
+    index: int,
+    total: int,
+    display_name: str,
+    message: str,
+) -> None:
+    print(f"[{index}/{total}] {display_name}: {message}", flush=True)
+
+
+def _format_page_range(page_numbers: Sequence[int]) -> str:
+    if not page_numbers:
+        return ""
+
+    ranges: list[str] = []
+    range_start = previous = page_numbers[0]
+    for page_number in page_numbers[1:]:
+        if page_number == previous + 1:
+            previous = page_number
+            continue
+        ranges.append(_format_single_page_range(range_start, previous))
+        range_start = previous = page_number
+    ranges.append(_format_single_page_range(range_start, previous))
+    return ",".join(ranges)
+
+
+def _format_single_page_range(start: int, end: int) -> str:
+    return str(start) if start == end else f"{start}-{end}"
 
 
 def _error_text(error: Exception) -> str:
