@@ -8,13 +8,14 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-RESULT_SCHEMA_VERSION = 2
+RESULT_SCHEMA_VERSION = 3
 EXTRACTOR_VERSION = "extractor-1"
 ResultStatus = Literal["graded", "needs_review", "error"]
 
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
-Percentage = Annotated[float, Field(ge=0, le=1)]
+Percentage = Annotated[float, Field(ge=0, le=100)]
+Score100 = Annotated[int, Field(ge=0, le=100)]
 
 
 class _ResultModel(BaseModel):
@@ -34,14 +35,14 @@ class ResultFingerprint(_ResultModel):
     grading_prompt_version: NonEmptyStr
     model_id: NonEmptyStr
     extractor_version: NonEmptyStr
-    result_schema_version: Literal[2]
+    result_schema_version: Literal[3]
     digest: NonEmptyStr
 
     @field_validator("result_schema_version", mode="before")
     @classmethod
     def validate_schema_version(cls, value: object) -> object:
         if type(value) is not int or value != RESULT_SCHEMA_VERSION:
-            raise ValueError("result_schema_version must be integer 2")
+            raise ValueError("result_schema_version must be integer 3")
         return value
 
 
@@ -49,14 +50,14 @@ class ResultGrade(_ResultModel):
     criterion_scores: dict[NonEmptyStr, NonNegativeInt]
     item_scores: dict[NonEmptyStr, NonNegativeInt]
     item_percentages: dict[NonEmptyStr, Percentage]
-    total_score: NonNegativeInt
+    total_score: Score100
     weakest_item_id: NonEmptyStr
     feedback: NonEmptyStr
     review_reasons: list[NonEmptyStr] = Field(default_factory=list)
 
 
 class ResultRecord(_ResultModel):
-    schema_version: Literal[2] = RESULT_SCHEMA_VERSION
+    schema_version: Literal[3] = RESULT_SCHEMA_VERSION
     status: ResultStatus
     student_id: NonEmptyStr
     student_name: NonEmptyStr
@@ -69,7 +70,7 @@ class ResultRecord(_ResultModel):
     @classmethod
     def validate_schema_version(cls, value: object) -> object:
         if type(value) is not int or value != RESULT_SCHEMA_VERSION:
-            raise ValueError("schema_version must be integer 2")
+            raise ValueError("schema_version must be integer 3")
         return value
 
     @model_validator(mode="after")
@@ -84,14 +85,14 @@ class ResultRecord(_ResultModel):
 
 
 class ResultsDocument(_ResultModel):
-    schema_version: Literal[2] = RESULT_SCHEMA_VERSION
+    schema_version: Literal[3] = RESULT_SCHEMA_VERSION
     results: list[ResultRecord] = Field(default_factory=list)
 
     @field_validator("schema_version", mode="before")
     @classmethod
     def validate_schema_version(cls, value: object) -> object:
         if type(value) is not int or value != RESULT_SCHEMA_VERSION:
-            raise ValueError("schema_version must be integer 2")
+            raise ValueError("schema_version must be integer 3")
         return value
 
 

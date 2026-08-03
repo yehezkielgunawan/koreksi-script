@@ -36,7 +36,7 @@ def _grade() -> ResultGrade:
     return ResultGrade(
         criterion_scores={"criterion_1": 8},
         item_scores={"question_1": 8},
-        item_percentages={"question_1": 0.8},
+        item_percentages={"question_1": 80.0},
         total_score=8,
         weakest_item_id="question_1",
         feedback="Perbaiki bukti pendukung.",
@@ -98,11 +98,16 @@ def test_result_record_requires_error_for_error_status() -> None:
         )
 
 
-def test_results_document_uses_version_two() -> None:
+def test_results_document_uses_version_three() -> None:
     document = ResultsDocument(results=[_record()])
 
-    assert document.schema_version == 2
+    assert document.schema_version == RESULT_SCHEMA_VERSION
     assert document.results[0].status == "graded"
+
+
+def test_results_document_rejects_version_two() -> None:
+    with pytest.raises(ValidationError, match="schema_version"):
+        ResultsDocument.model_validate({"schema_version": 2, "results": []})
 
 
 def test_result_store_saves_atomically_and_loads_exact_cache(

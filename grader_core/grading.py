@@ -164,7 +164,8 @@ def calculate_grade(
         for item in rubric.items
     }
     item_percentages = {
-        item.id: item_scores[item.id] / item.max_points for item in rubric.items
+        item.id: item_scores[item.id] / item.max_points * 100
+        for item in rubric.items
     }
 
     missing_feedback = [

@@ -305,6 +305,11 @@ def test_calculate_grade_uses_percentage_for_weakest_item() -> None:
         "criterion_3": 34,
     }
     assert grade.item_scores == {"question_1": 22, "question_2": 29, "question_3": 34}
+    assert grade.item_percentages == {
+        "question_1": 88.0,
+        "question_2": 82.85714285714286,
+        "question_3": 85.0,
+    }
     assert grade.total_score == 85
     assert grade.weakest_item_id == "question_2"
     assert grade.feedback == "Feedback question 2."
