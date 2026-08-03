@@ -52,6 +52,7 @@ def test_discover_submissions_excludes_question_and_declaration_files(
         SubmissionFiles(
             student_id="2902737810",
             student_name="LUK SEKAR DADARI",
+            assignment_root=assignment_root,
             folder=student_folder,
             answer_path=answer_path,
             question_path=question_path,
@@ -81,6 +82,23 @@ def test_discover_submissions_flags_missing_answer_file(tmp_path: Path) -> None:
 
     assert submission.answer_path is None
     assert submission.review_reasons == (MISSING_ANSWER_FILE,)
+
+
+def test_discover_submissions_uses_assignment_root_question_fallback(
+    tmp_path: Path,
+) -> None:
+    assignment_root = tmp_path / "StudentAnswer_ISYS6599"
+    student_folder = assignment_root / "2902737810_LUK SEKAR DADARI"
+    answer_path = _write(student_folder / "answer.pdf")
+    question_path = _write(
+        assignment_root / "Question.html", "<p>Weekly question</p>"
+    )
+
+    submission = discover_submissions([assignment_root])[0]
+
+    assert submission.assignment_root == assignment_root
+    assert submission.question_path == question_path
+    assert submission.answer_path == answer_path
 
 
 def test_discover_submissions_rejects_non_assignment_roots(tmp_path: Path) -> None:

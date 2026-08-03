@@ -56,6 +56,11 @@ from grader_core.openrouter import (
     OpenRouterClient,
     RequestMetadata,
 )
+from grader_core.questions import (
+    QuestionMappingError,
+    QuestionSection,
+    extract_question_sections,
+)
 from grader_core.results import (
     EXTRACTOR_VERSION,
     RESULT_SCHEMA_VERSION,
@@ -102,6 +107,8 @@ __all__ = [
     "PageContent",
     "RenderedPage",
     "RequestMetadata",
+    "QuestionMappingError",
+    "QuestionSection",
     "RESULT_SCHEMA_VERSION",
     "ResultFingerprint",
     "ResultGrade",
@@ -122,6 +129,7 @@ __all__ = [
     "chunk_visual_pages",
     "render_visual_pages",
     "select_visual_pages",
+    "extract_question_sections",
     "grading_response_schema",
     "validate_grading_response",
     "validate_visual_evidence",

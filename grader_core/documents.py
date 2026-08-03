@@ -63,6 +63,7 @@ _LIST_ITEM_TAGS = frozenset({"li"})
 class SubmissionFiles:
     student_id: str
     student_name: str
+    assignment_root: Path
     folder: Path
     answer_path: Path | None
     question_path: Path | None
@@ -179,7 +180,9 @@ def discover_submissions(assignment_roots: Iterable[Path]) -> list[SubmissionFil
             path for path in assignment_root.iterdir() if path.is_dir()
         ):
             student_id, student_name = _student_identity(student_folder.name)
-            answer_candidates, question_path = _student_documents(student_folder)
+            answer_candidates, question_path = _student_documents(
+                student_folder, assignment_root
+            )
             review_reasons: tuple[str, ...]
             answer_path: Path | None
 
@@ -197,6 +200,7 @@ def discover_submissions(assignment_roots: Iterable[Path]) -> list[SubmissionFil
                 SubmissionFiles(
                     student_id=student_id,
                     student_name=student_name,
+                    assignment_root=assignment_root,
                     folder=student_folder,
                     answer_path=answer_path,
                     question_path=question_path,
@@ -372,7 +376,9 @@ def _student_identity(folder_name: str) -> tuple[str, str]:
     return "", folder_name.replace("_", " ")
 
 
-def _student_documents(student_folder: Path) -> tuple[list[Path], Path | None]:
+def _student_documents(
+    student_folder: Path, assignment_root: Path
+) -> tuple[list[Path], Path | None]:
     answer_candidates: list[Path] = []
     question_paths: list[Path] = []
 
@@ -386,7 +392,12 @@ def _student_documents(student_folder: Path) -> tuple[list[Path], Path | None]:
             continue
         answer_candidates.append(path)
 
-    return answer_candidates, question_paths[0] if question_paths else None
+    if question_paths:
+        question_path = question_paths[0]
+    else:
+        root_question_path = assignment_root / "Question.html"
+        question_path = root_question_path if root_question_path.is_file() else None
+    return answer_candidates, question_path
 
 
 def _convert_to_pdf(source_path: Path, temporary_dir: Path) -> Path | NormalizationFailure:
