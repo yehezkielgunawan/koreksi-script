@@ -16,6 +16,7 @@ from grader_core.documents import RenderedPage
 from grader_core.grading import (
     EvidencePackage,
     GradingResponse,
+    GradingValidationError,
     VisualEvidenceResponse,
     grading_response_schema,
     visual_evidence_schema,
@@ -133,6 +134,7 @@ class OpenRouterClient:
         prompt: str,
         evidence_package: EvidencePackage,
         response_schema: dict[str, Any] | None = None,
+        validator: Callable[[GradingResponse], None] | None = None,
     ) -> GradingResponse:
         evidence_json = json.dumps(
             evidence_package.model_dump(mode="json"),
@@ -154,6 +156,7 @@ class OpenRouterClient:
             GradingResponse,
             response_schema or grading_response_schema(),
             "grading_response",
+            validator=validator,
         )
 
     def _request_and_parse(
@@ -162,6 +165,7 @@ class OpenRouterClient:
         response_model: type[VisualEvidenceResponse] | type[GradingResponse],
         response_schema: dict[str, Any],
         schema_name: str,
+        validator: Callable[[object], None] | None = None,
     ) -> VisualEvidenceResponse | GradingResponse:
         response_format = {
             "type": "json_schema",
@@ -173,15 +177,16 @@ class OpenRouterClient:
         }
         response = self._create_completion(messages, response_format)
         try:
-            return self._parse_response(response, response_model)
-        except InvalidModelResponseError:
+            return self._parse_and_validate(response, response_model, validator)
+        except (InvalidModelResponseError, GradingValidationError) as first_error:
             correction_messages = [
                 *messages,
                 {
                     "role": "user",
                     "content": (
-                        "Your previous response was invalid. Return only valid JSON "
-                        "matching the supplied schema. Do not add Markdown or commentary."
+                        "Your previous response was invalid: "
+                        f"{first_error}. Return only valid JSON matching the "
+                        "supplied schema. Do not add Markdown or commentary."
                     ),
                 },
             ]
@@ -189,8 +194,15 @@ class OpenRouterClient:
                 corrected_response = self._create_completion(
                     correction_messages, response_format
                 )
-                return self._parse_response(corrected_response, response_model)
-            except (InvalidModelResponseError, ValidationError, json.JSONDecodeError) as second_error:
+                return self._parse_and_validate(
+                    corrected_response, response_model, validator
+                )
+            except (
+                InvalidModelResponseError,
+                ValidationError,
+                json.JSONDecodeError,
+                GradingValidationError,
+            ) as second_error:
                 raise InvalidModelResponseError(
                     "Model response remained invalid after one correction request"
                 ) from second_error
@@ -243,7 +255,20 @@ class OpenRouterClient:
             payload = json.loads(content)
             return response_model.model_validate(payload)
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise InvalidModelResponseError("Response was not valid structured JSON") from exc
+            raise InvalidModelResponseError(
+                f"Response was not valid structured JSON: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _parse_and_validate(
+        response: Any,
+        response_model: type[VisualEvidenceResponse] | type[GradingResponse],
+        validator: Callable[[object], None] | None,
+    ) -> VisualEvidenceResponse | GradingResponse:
+        parsed = OpenRouterClient._parse_response(response, response_model)
+        if validator is not None:
+            validator(parsed)
+        return parsed
 
 
 def _timestamp() -> str:

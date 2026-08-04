@@ -207,5 +207,46 @@ def visual_evidence_schema() -> dict:
     return VisualEvidenceResponse.model_json_schema()
 
 
-def grading_response_schema() -> dict:
-    return GradingResponse.model_json_schema()
+def grading_response_schema(rubric: RubricConfig | None = None) -> dict:
+    """Build the grading JSON schema, constrained by the rubric when given."""
+    schema = GradingResponse.model_json_schema()
+    if rubric is None:
+        return schema
+    properties = schema["$defs"]["CriterionAssessment"]["properties"]
+    properties["item_id"]["enum"] = [item.id for item in rubric.items]
+    properties["criterion_id"]["enum"] = [
+        criterion.id for item in rubric.items for criterion in item.criteria
+    ]
+    properties["selected_score"]["enum"] = sorted(
+        {
+            level.score
+            for item in rubric.items
+            for criterion in item.criteria
+            for level in criterion.levels
+        }
+    )
+    return schema
+
+
+def render_rubric_prompt(rubric: RubricConfig) -> str:
+    """Render the selected rubric as prompt text for the grading model."""
+    lines = [
+        "RUBRIC - Grade only against the criteria below. Use the exact "
+        "criterion identifiers and declared score levels in your response.",
+        "",
+        f"Assignment: {rubric.assignment.id} - {rubric.assignment.title} "
+        f"({rubric.assignment.total_points} points). Feedback language: "
+        f"{rubric.assignment.feedback_language}.",
+    ]
+    for item in rubric.items:
+        lines.append("")
+        lines.append(f"Question {item.id} - {item.label} ({item.max_points} points)")
+        for criterion in item.criteria:
+            lines.append(f"  Criterion {criterion.id} ({criterion.max_points} points): "
+                         f"{criterion.description}")
+            lines.append(f"    Required evidence: {criterion.required_evidence}")
+            level_text = "; ".join(
+                f"{level.score} = {level.description}" for level in criterion.levels
+            )
+            lines.append(f"    Score levels: {level_text}")
+    return "\n".join(lines)

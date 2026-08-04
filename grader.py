@@ -43,6 +43,7 @@ from grader_core import (
 )
 from grader_core.config import RubricCatalog, RubricConfig, RubricLoadError
 from grader_core.documents import NormalizedDocument
+from grader_core.grading import grading_response_schema, render_rubric_prompt
 from grader_core.openrouter import DEFAULT_REQUEST_TIMEOUT_SECONDS, OpenRouterClient
 
 
@@ -541,11 +542,15 @@ def _grade_submission(
     report_progress("requesting final grade")
     request_started = monotonic()
     response = client.request_grade(
-        grading_prompt,
+        f"{grading_prompt}\n\n{render_rubric_prompt(rubric)}",
         EvidencePackage(
             question_text=question_text,
             answer_text=answer_text,
             visual_evidence=visual_evidence,
+        ),
+        response_schema=grading_response_schema(rubric),
+        validator=lambda result: validate_grading_response(
+            result, rubric, len(normalized.pages)
         ),
     )
     report_progress(f"final grade completed in {monotonic() - request_started:.1f}s")
