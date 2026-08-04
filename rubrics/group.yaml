@@ -1,0 +1,58 @@
+schema_version: 3
+rubric:
+  id: group
+  feedback_language: id
+  overall_feedback_below: 80
+assignments:
+  - id: group-default
+    title: Group Paper Draft - Latar Belakang
+    total_points: 100
+    questions:
+      - id: background_section
+        label: Latar Belakang
+        max_points: 100
+        criteria:
+          - id: background_context
+            description: Kejelasan konteks dan latar masalah.
+            max_points: 25
+            required_evidence: Deskripsi konteks, kondisi awal, dan ruang lingkup.
+            levels:
+              - score: 0
+                description: Konteks tidak ada atau tidak berkaitan.
+              - score: 12
+                description: Konteks dasar tersedia tetapi masih umum.
+              - score: 25
+                description: Konteks spesifik dan lengkap.
+          - id: background_problem
+            description: Ketajaman perumusan masalah dan urgensinya.
+            max_points: 25
+            required_evidence: Pernyataan masalah, dampak, dan alasan pembahasan.
+            levels:
+              - score: 0
+                description: Masalah tidak dirumuskan.
+              - score: 12
+                description: Masalah ada tetapi urgensinya belum jelas.
+              - score: 25
+                description: Masalah dan urgensinya meyakinkan.
+          - id: background_evidence
+            description: Relevansi dan kecukupan data atau sumber pendukung.
+            max_points: 25
+            required_evidence: Data, referensi, contoh, atau fakta pendukung.
+            levels:
+              - score: 0
+                description: Tidak ada bukti relevan.
+              - score: 12
+                description: Bukti terbatas atau kurang terhubung.
+              - score: 25
+                description: Bukti relevan dan cukup.
+          - id: background_coherence
+            description: Koherensi alur dari konteks menuju tujuan paper.
+            max_points: 25
+            required_evidence: Transisi logis, hubungan antarparagraf, dan arah paper.
+            levels:
+              - score: 0
+                description: Argumentasi tidak koheren.
+              - score: 12
+                description: Alur dapat diikuti tetapi masih memiliki lompatan logika.
+              - score: 25
+                description: Alur logis, konsisten, dan jelas.

@@ -1,0 +1,26 @@
+schema_version: 3
+rubric:
+  id: individual
+  feedback_language: id
+  overall_feedback_below: 80
+assignments:
+  - id: individual-default
+    title: Individual College Student Essay
+    total_points: 100
+    questions:
+      - id: question_1
+        label: Question 1
+        max_points: 30
+        criteria: Ability to explain the techniques and tools used, including the procedures for initiating and planning the IS/IT project.
+      - id: question_2
+        label: Question 2
+        max_points: 20
+        criteria: Ability to demonstrate the skills required to create the IS/IT project budget based on the project scope and available project resources.
+      - id: question_3
+        label: Question 3
+        max_points: 20
+        criteria: Ability to demonstrate the skills required to monitor project performance against mutually agreed criteria.
+      - id: question_4
+        label: Question 4
+        max_points: 30
+        criteria: Ability to demonstrate the skills required to evaluate an implemented IS/IT project.

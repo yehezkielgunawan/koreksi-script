@@ -26,6 +26,14 @@ ENV/
 # Results and logs
 results.json
 *.log
+results_v2.json
+results_v3.json
+*_review.json
+individual_results.json
+group_results.json
+
+# Private planning and design documents
+docs/
 
 # Serena (code analysis tool)
 .serena/
