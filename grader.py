@@ -19,7 +19,6 @@ from dotenv import load_dotenv
 from grader_core import (
     DEFAULT_MODEL,
     AssignmentSelector,
-    EvidencePackage,
     NormalizationFailure,
     QuestionMappingError,
     QuestionSection,
@@ -29,17 +28,13 @@ from grader_core import (
     SubmissionFiles,
     build_fingerprint,
     calculate_grade,
-    chunk_visual_pages,
     discover_submissions,
     extract_question_sections,
     load_assignment_selector,
     load_rubric_catalog,
     select_catalog_assignment,
     normalize_document,
-    render_visual_pages,
-    select_visual_pages,
     validate_grading_response,
-    validate_visual_evidence,
 )
 from grader_core.config import RubricCatalog, RubricConfig, RubricLoadError
 from grader_core.documents import NormalizedDocument
@@ -48,10 +43,9 @@ from grader_core.openrouter import DEFAULT_REQUEST_TIMEOUT_SECONDS, OpenRouterCl
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_VISUAL_PROMPT = PROJECT_ROOT / "prompts" / "visual_evidence.md"
 DEFAULT_GRADING_PROMPT = PROJECT_ROOT / "prompts" / "grading.md"
-DEFAULT_OUTPUT = "results_v3.json"
-LEGACY_OUTPUT_NAMES = {"individual_results.json", "group_results.json"}
+DEFAULT_OUTPUT = "results_v4.json"
+LEGACY_OUTPUT_NAMES = {"individual_results.json", "group_results.json", "results_v3.json"}
 PROMPT_VERSION_PATTERN = re.compile(r"prompt_version:\s*([^\s>-]+)", re.IGNORECASE)
 
 
@@ -139,7 +133,6 @@ def _add_grading_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="SECONDS",
         help="maximum seconds allowed for each model request",
     )
-    parser.add_argument("--visual-prompt", default=str(DEFAULT_VISUAL_PROMPT))
     parser.add_argument("--grading-prompt", default=str(DEFAULT_GRADING_PROMPT))
 
 
@@ -164,7 +157,7 @@ def _preflight(
     if output_path.name in LEGACY_OUTPUT_NAMES:
         raise ValueError(
             f"legacy output path is not allowed: {output_path.name}; "
-            "use results_v3.json or another versioned output"
+            "use results_v4.json or another versioned output"
         )
 
     catalog = load_rubric_catalog(Path(args.rubric))
@@ -187,7 +180,6 @@ def _preflight(
             file=sys.stderr,
         )
 
-    _check_prompt(Path(args.visual_prompt), "visual prompt")
     _check_prompt(Path(args.grading_prompt), "grading prompt")
 
     selector_cache: dict[Path, AssignmentSelector] = {}
@@ -340,20 +332,6 @@ def _run_dry_run(
                 continue
 
             normalized_count += 1
-            try:
-                selected_pages = select_visual_pages(normalized)
-                if selected_pages:
-                    render_visual_pages(
-                        normalized.pdf_path,
-                        selected_pages,
-                        student_temp / "rendered",
-                    )
-            except (OSError, ValueError) as exc:
-                review_count += 1
-                print(
-                    f"Review: {submission.student_id or submission.folder.name} "
-                    f"(rendering failed: {exc})"
-                )
 
     print(
         f"Dry run: {len(contexts)} submission(s), "
@@ -373,11 +351,8 @@ def _run_grading(
 ) -> int:
     output_path = Path(args.output)
     store = ResultStore(output_path)
-    visual_prompt_path = Path(args.visual_prompt)
     grading_prompt_path = Path(args.grading_prompt)
-    visual_prompt = visual_prompt_path.read_text(encoding="utf-8")
     grading_prompt = grading_prompt_path.read_text(encoding="utf-8")
-    visual_prompt_version = _prompt_version(visual_prompt)
     grading_prompt_version = _prompt_version(grading_prompt)
     client = OpenRouterClient(
         model=args.model,
@@ -406,7 +381,6 @@ def _run_grading(
             submission,
             normalized=None,
             rubric_sha256=rubric_sha256,
-            visual_prompt_version=visual_prompt_version,
             grading_prompt_version=grading_prompt_version,
             model_id=args.model,
         )
@@ -427,7 +401,6 @@ def _run_grading(
                             submission,
                             normalized=normalized,
                             rubric_sha256=rubric_sha256,
-                            visual_prompt_version=visual_prompt_version,
                             grading_prompt_version=grading_prompt_version,
                             model_id=args.model,
                         )
@@ -450,7 +423,6 @@ def _run_grading(
                                 fingerprint,
                                 context.rubric,
                                 question_sections,
-                                visual_prompt,
                                 grading_prompt,
                                 client,
                                 report_progress,
@@ -491,7 +463,6 @@ def _grade_submission(
     fingerprint: object,
     rubric: RubricConfig,
     question_sections: Sequence[QuestionSection],
-    visual_prompt: str,
     grading_prompt: str,
     client: OpenRouterClient,
     report_progress: Callable[[str], None],
@@ -500,61 +471,21 @@ def _grade_submission(
         f"[{section.question_id}] {section.label}\n{section.text}"
         for section in question_sections
     )
-    answer_text = "\n\n".join(
-        f"[Page {page.number}]\n{page.text}" for page in normalized.pages if page.text
-    )
-    visual_evidence = []
     review_reasons: list[str] = []
-
-    with tempfile.TemporaryDirectory(prefix="koreksi-render-") as rendered_temp:
-        selected_pages = select_visual_pages(normalized)
-        if selected_pages:
-            report_progress(f"rendering {len(selected_pages)} visual page(s)")
-            rendered_pages = render_visual_pages(
-                normalized.pdf_path,
-                selected_pages,
-                Path(rendered_temp),
-            )
-            rendered_by_page = {page.page_number: page for page in rendered_pages}
-            page_chunks = chunk_visual_pages(selected_pages)
-            for chunk_index, page_chunk in enumerate(page_chunks, start=1):
-                chunk_label = _format_page_range(page_chunk)
-                report_progress(
-                    f"visual chunk {chunk_index}/{len(page_chunks)}, "
-                    f"pages {chunk_label}"
-                )
-                request_started = monotonic()
-                response = client.extract_visual_evidence(
-                    visual_prompt,
-                    [rendered_by_page[page_number] for page_number in page_chunk],
-                )
-                report_progress(
-                    f"visual chunk {chunk_index}/{len(page_chunks)} completed "
-                    f"in {monotonic() - request_started:.1f}s"
-                )
-                validate_visual_evidence(response, len(normalized.pages))
-                visual_evidence.extend(response.evidence)
-                review_reasons.extend(response.review_reasons)
-
-    if not answer_text and not visual_evidence:
-        review_reasons.append("no_text_or_visual_evidence")
 
     report_progress("requesting final grade")
     request_started = monotonic()
     response = client.request_grade(
         f"{grading_prompt}\n\n{render_rubric_prompt(rubric)}",
-        EvidencePackage(
-            question_text=question_text,
-            answer_text=answer_text,
-            visual_evidence=visual_evidence,
-        ),
+        question_text,
+        normalized.pdf_path,
         response_schema=grading_response_schema(rubric),
         validator=lambda result: validate_grading_response(
-            result, rubric, len(normalized.pages)
+            result, rubric, normalized.page_count
         ),
     )
     report_progress(f"final grade completed in {monotonic() - request_started:.1f}s")
-    validate_grading_response(response, rubric, len(normalized.pages))
+    validate_grading_response(response, rubric, normalized.page_count)
     calculated = calculate_grade(response, rubric)
     review_reasons.extend(calculated.review_reasons)
     result_grade = ResultGrade(
@@ -620,7 +551,6 @@ def _build_submission_fingerprint(
     *,
     normalized: NormalizedDocument | None,
     rubric_sha256: str,
-    visual_prompt_version: str,
     grading_prompt_version: str,
     model_id: str,
 ) -> object:
@@ -644,7 +574,6 @@ def _build_submission_fingerprint(
         normalized_pdf_sha256=normalized_pdf_sha256,
         question_sha256=question_sha256,
         rubric_sha256=rubric_sha256,
-        visual_prompt_version=visual_prompt_version,
         grading_prompt_version=grading_prompt_version,
         model_id=model_id,
     )
@@ -691,26 +620,6 @@ def _print_progress(
     message: str,
 ) -> None:
     print(f"[{index}/{total}] {display_name}: {message}", flush=True)
-
-
-def _format_page_range(page_numbers: Sequence[int]) -> str:
-    if not page_numbers:
-        return ""
-
-    ranges: list[str] = []
-    range_start = previous = page_numbers[0]
-    for page_number in page_numbers[1:]:
-        if page_number == previous + 1:
-            previous = page_number
-            continue
-        ranges.append(_format_single_page_range(range_start, previous))
-        range_start = previous = page_number
-    ranges.append(_format_single_page_range(range_start, previous))
-    return ",".join(ranges)
-
-
-def _format_single_page_range(start: int, end: int) -> str:
-    return str(start) if start == end else f"{start}-{end}"
 
 
 def _error_text(error: Exception) -> str:

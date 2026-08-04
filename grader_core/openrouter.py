@@ -6,20 +6,16 @@ import os
 from pathlib import Path
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any
 
 from openai import OpenAI
 from pydantic import ValidationError
 
-from grader_core.documents import RenderedPage
 from grader_core.grading import (
-    EvidencePackage,
     GradingResponse,
     GradingValidationError,
-    VisualEvidenceResponse,
     grading_response_schema,
-    visual_evidence_schema,
 )
 
 
@@ -47,7 +43,7 @@ class RequestMetadata:
 
 
 class OpenRouterClient:
-    """Small, injectable OpenRouter client for structured multimodal requests."""
+    """Small, injectable OpenRouter client for structured PDF uploads."""
 
     def __init__(
         self,
@@ -86,69 +82,37 @@ class OpenRouterClient:
         self._sleep = sleep
         self.last_metadata: RequestMetadata | None = None
 
-    def extract_visual_evidence(
-        self,
-        prompt: str,
-        rendered_pages: Sequence[RenderedPage],
-    ) -> VisualEvidenceResponse:
-        content: list[dict[str, Any]] = [
-            {
-                    "type": "text",
-                    "text": (
-                        "Inspect every supplied page image and return visual evidence "
-                        "only. Each page number is provided immediately before its image."
-                ),
-            }
-        ]
-        for rendered_page in rendered_pages:
-            encoded = base64.b64encode(rendered_page.path.read_bytes()).decode("ascii")
-            content.append(
-                {
-                    "type": "text",
-                    "text": f"Page {rendered_page.page_number} image follows.",
-                }
-            )
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{encoded}",
-                        "detail": "high",
-                    },
-                }
-            )
-
-        messages = [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": content},
-        ]
-        return self._request_and_parse(
-            messages,
-            VisualEvidenceResponse,
-            visual_evidence_schema(),
-            "visual_evidence_response",
-        )
-
     def request_grade(
         self,
         prompt: str,
-        evidence_package: EvidencePackage,
+        question_text: str,
+        pdf_path: Path,
         response_schema: dict[str, Any] | None = None,
         validator: Callable[[GradingResponse], None] | None = None,
     ) -> GradingResponse:
-        evidence_json = json.dumps(
-            evidence_package.model_dump(mode="json"),
-            ensure_ascii=False,
-            indent=2,
-        )
+        encoded = base64.b64encode(pdf_path.read_bytes()).decode("ascii")
         messages = [
             {"role": "system", "content": prompt},
             {
                 "role": "user",
-                "content": (
-                    "Grade the submission using only this evidence package.\n\n"
-                    f"{evidence_json}"
-                ),
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Grade the submission PDF against the rubric below. "
+                            "Your response must be valid JSON matching the "
+                            "supplied schema.\n\n"
+                            f"QUESTION - {question_text}"
+                        ),
+                    },
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": pdf_path.name,
+                            "file_data": f"data:application/pdf;base64,{encoded}",
+                        },
+                    },
+                ],
             },
         ]
         return self._request_and_parse(
@@ -162,11 +126,11 @@ class OpenRouterClient:
     def _request_and_parse(
         self,
         messages: list[dict[str, Any]],
-        response_model: type[VisualEvidenceResponse] | type[GradingResponse],
+        response_model: type[GradingResponse],
         response_schema: dict[str, Any],
         schema_name: str,
         validator: Callable[[object], None] | None = None,
-    ) -> VisualEvidenceResponse | GradingResponse:
+    ) -> GradingResponse:
         response_format = {
             "type": "json_schema",
             "json_schema": {
@@ -243,8 +207,8 @@ class OpenRouterClient:
     @staticmethod
     def _parse_response(
         response: Any,
-        response_model: type[VisualEvidenceResponse] | type[GradingResponse],
-    ) -> VisualEvidenceResponse | GradingResponse:
+        response_model: type[GradingResponse],
+    ) -> GradingResponse:
         try:
             content = response.choices[0].message.content
         except (AttributeError, IndexError, TypeError) as exc:
@@ -262,9 +226,9 @@ class OpenRouterClient:
     @staticmethod
     def _parse_and_validate(
         response: Any,
-        response_model: type[VisualEvidenceResponse] | type[GradingResponse],
+        response_model: type[GradingResponse],
         validator: Callable[[object], None] | None,
-    ) -> VisualEvidenceResponse | GradingResponse:
+    ) -> GradingResponse:
         parsed = OpenRouterClient._parse_response(response, response_model)
         if validator is not None:
             validator(parsed)
