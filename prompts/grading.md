@@ -1,4 +1,4 @@
-<!-- prompt_version: 1 -->
+<!-- prompt_version: 2 -->
 
 # Assignment Grading
 
