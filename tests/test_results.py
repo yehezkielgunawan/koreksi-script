@@ -25,10 +25,9 @@ def _fingerprint(*, source_sha256: str = "source") -> ResultFingerprint:
         normalized_pdf_sha256="pdf",
         question_sha256="question",
         rubric_sha256="rubric",
-        visual_prompt_version="visual-1",
-        grading_prompt_version="grading-1",
+        grading_prompt_version="grading-3",
         model_id="google/gemma-4-26b-a4b-it:free",
-        extractor_version="extractor-1",
+        extractor_version="pdf-upload-1",
     )
 
 
@@ -98,7 +97,7 @@ def test_result_record_requires_error_for_error_status() -> None:
         )
 
 
-def test_results_document_uses_version_three() -> None:
+def test_results_document_uses_version_four() -> None:
     document = ResultsDocument(results=[_record()])
 
     assert document.schema_version == RESULT_SCHEMA_VERSION
@@ -108,6 +107,24 @@ def test_results_document_uses_version_three() -> None:
 def test_results_document_rejects_version_two() -> None:
     with pytest.raises(ValidationError, match="schema_version"):
         ResultsDocument.model_validate({"schema_version": 2, "results": []})
+
+
+def test_fingerprint_rejects_legacy_visual_prompt_field() -> None:
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        ResultFingerprint.model_validate(
+            {
+                "source_sha256": "source",
+                "normalized_pdf_sha256": "pdf",
+                "question_sha256": "question",
+                "rubric_sha256": "rubric",
+                "visual_prompt_version": "visual-1",
+                "grading_prompt_version": "grading-3",
+                "model_id": "google/gemma-4-26b-a4b-it:free",
+                "extractor_version": "pdf-upload-1",
+                "result_schema_version": 4,
+                "digest": "digest",
+            }
+        )
 
 
 def test_result_store_saves_atomically_and_loads_exact_cache(

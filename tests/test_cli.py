@@ -12,8 +12,6 @@ from grader_core.grading import (
     CriterionAssessment,
     EvidenceCitation,
     GradingResponse,
-    VisualEvidenceItem,
-    VisualEvidenceResponse,
 )
 from grader_core.results import ResultsDocument
 
@@ -127,8 +125,7 @@ def test_grade_dry_run_discovers_and_normalizes_without_api_client(
     student_folder.mkdir(parents=True)
     shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
     _write_selector(assignment_root)
-    output_path = tmp_path / "results_v3.json"
-
+    output_path = tmp_path / "results_v4.json"
     def fail_if_initialized(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("dry-run must not initialize the API client")
 
@@ -182,7 +179,7 @@ def test_grade_dry_run_uses_sole_catalog_assignment_without_selector(
             "--input",
             str(assignment_root),
             "--output",
-            str(tmp_path / "results_v3.json"),
+            str(tmp_path / "results_v4.json"),
             "--dry-run",
         ]
     )
@@ -206,32 +203,20 @@ def test_grade_writes_a_versioned_result_without_network_access(
     (student_folder / "Question.html").write_text(
         "<p>Explain the answer.</p>", encoding="utf-8"
     )
-    output_path = tmp_path / "results_v3.json"
+    output_path = tmp_path / "results_v4.json"
     client_kwargs: dict[str, object] = {}
     grade_prompts: list[str] = []
+    grade_pdf_paths: list[object] = []
 
     class FakeClient:
         def __init__(self, **kwargs: object) -> None:
             client_kwargs.update(kwargs)
 
-        def extract_visual_evidence(
-            self, _prompt: str, pages: list[object]
-        ) -> VisualEvidenceResponse:
-            return VisualEvidenceResponse(
-                evidence=[
-                    VisualEvidenceItem(
-                        page=getattr(page, "page_number"),
-                        description="Bukti terlihat jelas.",
-                        readability="clear",
-                    )
-                    for page in pages
-                ]
-            )
-
         def request_grade(
-            self, prompt: str, _evidence: object, **_kwargs: object
+            self, prompt: str, _question_text: str, pdf_path: object, **_kwargs: object
         ) -> GradingResponse:
             grade_prompts.append(prompt)
+            grade_pdf_paths.append(pdf_path)
             return GradingResponse(
                 assessments=[
                     CriterionAssessment(
@@ -240,7 +225,6 @@ def test_grade_writes_a_versioned_result_without_network_access(
                         selected_score=100,
                         rationale="Jawaban didukung bukti.",
                         evidence=[EvidenceCitation(page=1, quote="Jawaban normal")],
-                        readability="clear",
                     )
                 ],
                 item_feedback={"question_1": "Jawaban sudah baik."},
@@ -268,6 +252,7 @@ def test_grade_writes_a_versioned_result_without_network_access(
     assert client_kwargs["request_timeout_seconds"] == 90
     assert "Explains the answer." in grade_prompts[0]
     assert "question_1_criterion" in grade_prompts[0]
+    assert Path(grade_pdf_paths[0]).is_file()
     document = ResultsDocument.model_validate_json(output_path.read_text())
     assert document.results[0].status == "graded"
     assert document.results[0].grade is not None
@@ -275,8 +260,6 @@ def test_grade_writes_a_versioned_result_without_network_access(
     assert all(0 <= value <= 100 for value in document.results[0].grade.item_percentages.values())
     output = capsys.readouterr().out
     assert "[1/1] TEST STUDENT: normalizing document" in output
-    assert "[1/1] TEST STUDENT: visual chunk 1/1, pages 1" in output
-    assert "[1/1] TEST STUDENT: visual chunk 1/1 completed in" in output
     assert "[1/1] TEST STUDENT: requesting final grade" in output
 
 
@@ -312,7 +295,7 @@ def test_grade_rejects_non_positive_request_timeout(
             "--input",
             str(assignment_root),
             "--output",
-            str(tmp_path / "results_v3.json"),
+            str(tmp_path / "results_v4.json"),
             "--request-timeout",
             request_timeout,
         ]
@@ -338,29 +321,15 @@ def test_grade_persists_timeout_error_and_continues_to_next_submission(
             "<p>Explain the answer.</p>", encoding="utf-8"
         )
     _write_selector(assignment_root)
-    output_path = tmp_path / "results_v3.json"
+    output_path = tmp_path / "results_v4.json"
     grade_calls = 0
 
     class FakeClient:
         def __init__(self, **_kwargs: object) -> None:
             pass
 
-        def extract_visual_evidence(
-            self, _prompt: str, pages: list[object]
-        ) -> VisualEvidenceResponse:
-            return VisualEvidenceResponse(
-                evidence=[
-                    VisualEvidenceItem(
-                        page=getattr(page, "page_number"),
-                        description="Bukti terlihat jelas.",
-                        readability="clear",
-                    )
-                    for page in pages
-                ]
-            )
-
         def request_grade(
-            self, _prompt: str, _evidence: object, **_kwargs: object
+            self, _prompt: str, _question_text: str, _pdf_path: object, **_kwargs: object
         ) -> GradingResponse:
             nonlocal grade_calls
             grade_calls += 1
@@ -374,7 +343,6 @@ def test_grade_persists_timeout_error_and_continues_to_next_submission(
                         selected_score=100,
                         rationale="Jawaban didukung bukti.",
                         evidence=[EvidenceCitation(page=1, quote="Jawaban normal")],
-                        readability="clear",
                     )
                 ],
                 item_feedback={"question_1": "Jawaban sudah baik."},
@@ -427,8 +395,7 @@ def test_grade_dry_run_uses_dynamic_catalog_questions(
         "<h2>Question 2</h2><p>Second statement.</p>",
         encoding="utf-8",
     )
-    output_path = tmp_path / "results_v3.json"
-
+    output_path = tmp_path / "results_v4.json"
     monkeypatch.setattr(
         "grader.OpenRouterClient",
         lambda *_args, **_kwargs: pytest.fail("dry-run must not initialize API"),
@@ -476,7 +443,7 @@ def test_grade_requires_assignment_selector_before_api(
             "--input",
             str(assignment_root),
             "--output",
-            str(tmp_path / "results_v3.json"),
+            str(tmp_path / "results_v4.json"),
         ]
     )
 
@@ -484,8 +451,12 @@ def test_grade_requires_assignment_selector_before_api(
     assert "assignment selector" in capsys.readouterr().err.lower()
 
 
+@pytest.mark.parametrize(
+    "output_name",
+    ["individual_results.json", "group_results.json", "results_v3.json"],
+)
 def test_grade_rejects_legacy_output_paths(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], output_name: str
 ) -> None:
     rubric_path = _write_catalog(tmp_path)
     assignment_root = tmp_path / "StudentAnswer_CLI"
@@ -499,7 +470,7 @@ def test_grade_rejects_legacy_output_paths(
             "--input",
             str(assignment_root),
             "--output",
-            "individual_results.json",
+            output_name,
             "--dry-run",
         ]
     )

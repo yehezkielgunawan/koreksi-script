@@ -1,6 +1,6 @@
 # Koreksi Script
 
-Auditable grading of student PDF, DOCX, and DOC submissions with a multimodal OpenRouter model. The unified `grader.py` CLI extracts text and visual evidence, validates structured model responses, calculates scores locally from YAML rubrics, and writes version-3 results with a separate human-review queue.
+Auditable grading of student PDF, DOCX, and DOC submissions with an OpenRouter model that reads each submission PDF directly. The unified `grader.py` CLI uploads the normalized PDF to the model, validates structured responses, calculates scores locally from YAML rubrics, and writes version-4 results with a separate human-review queue.
 
 ## Requirements
 
@@ -73,13 +73,13 @@ uv run grader.py validate --rubric rubrics/group.yaml
 
 ## Commands
 
-Preview discovery, document conversion, page rendering, and rubric selection without credentials or API requests:
+Preview discovery, document conversion, page counting, and rubric selection without credentials or API requests:
 
 ```bash
 uv run grader.py grade \
   --rubric rubrics/individual.yaml \
   --input /path/to/submissions \
-  --output results_v3.json \
+  --output results_v4.json \
   --dry-run
 ```
 
@@ -89,7 +89,7 @@ Run grading after the dry run succeeds:
 uv run grader.py grade \
   --rubric rubrics/individual.yaml \
   --input /path/to/submissions \
-  --output results_v3.json
+  --output results_v4.json
 ```
 
 Force a single student's submission to be graded again, bypassing the exact result cache:
@@ -99,14 +99,14 @@ uv run grader.py regrade \
   --student-id 2902737810 \
   --rubric rubrics/individual.yaml \
   --input /path/to/submissions \
-  --output results_v3.json
+  --output results_v4.json
 ```
 
-The `--model`, `--request-timeout`, `--visual-prompt`, and `--grading-prompt` options can override their defaults when testing a controlled configuration. Each model request has a 180-second timeout by default and is retried once for transient failures. Visual evidence requests send at most four page images at a time. Grading prints progress before and after each slow document or model operation, and continues to the next submission when a submission records an `error`.
+The `--model`, `--request-timeout`, and `--grading-prompt` options can override their defaults when testing a controlled configuration. Each model request has a 180-second timeout by default and is retried once for transient failures. The submission PDF is uploaded in a single request. Grading prints progress before and after each slow document or model operation, and continues to the next submission when a submission records an `error`.
 
 ## Results and Review
 
-The default result file is `results_v3.json`. Results use schema version 3 and contain a fingerprint covering the source document, normalized PDF, question, selected catalog assignment, selector, prompts, model, extractor, and schema version. Existing results are reused only when the complete fingerprint matches.
+The default result file is `results_v4.json`. Results use schema version 4 and contain a fingerprint covering the source document, normalized PDF, question, selected catalog assignment, selector, rubric, prompt, model, extractor, and schema version. Existing results are reused only when the complete fingerprint matches.
 
 Each record has one of these statuses:
 
@@ -114,11 +114,11 @@ Each record has one of these statuses:
 - `needs_review`: grading completed with an ambiguity or evidence issue, or preprocessing could not produce a reliable document.
 - `error`: processing failed and the error is persisted for investigation.
 
-Review records are also written to `results_v3_review.json`. Review flags include unreadable evidence, missing or ambiguous answers, conversion failures, invalid evidence references, and insufficient text or visual evidence. Scores are never calculated by the model; the application calculates them after response validation.
+Review records are also written to `results_v4_review.json`. Review flags include missing or ambiguous answers, conversion failures, invalid evidence references, and review reasons reported by the model. Scores are never calculated by the model; the application calculates them after response validation.
 
 The final `total_score` is always an integer from `0` through `100`. Item percentages are also reported from `0` through `100`.
 
-Retired output filenames are rejected to prevent accidental mixing of incompatible schemas.
+Retired output filenames (`individual_results.json`, `group_results.json`, `results_v3.json`) are rejected to prevent accidental mixing of incompatible schemas.
 
 ## Troubleshooting
 

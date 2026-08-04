@@ -15,8 +15,6 @@ from grader_core.grading import (
     GradeCalculationError,
     GradingResponse,
     GradingValidationError,
-    VisualEvidenceItem,
-    VisualEvidenceResponse,
     calculate_grade,
     grading_response_schema,
     render_rubric_prompt,
@@ -90,43 +88,22 @@ def _assessment(
             if evidence is None
             else evidence
         ),
-        readability="clear",
     )
 
 
-def test_response_models_accept_valid_visual_and_grading_data() -> None:
-    visual = VisualEvidenceResponse(
-        evidence=[
-            VisualEvidenceItem(
-                page=2,
-                transcription="A diagram label",
-                description="A diagram connects the two controls.",
-                readability="clear",
-            )
-        ]
-    )
+def test_response_models_accept_valid_grading_data() -> None:
     grading = GradingResponse(
         assessments=[_assessment("criterion_a", 6), _assessment("criterion_b", 4)],
         item_feedback={"question_1": "Jawaban lengkap."},
         overall_feedback="Pertahankan argumentasi yang jelas.",
     )
 
-    assert visual.evidence[0].page == 2
     assert len(grading.assessments) == 2
 
 
 def test_response_models_reject_unknown_properties() -> None:
     with pytest.raises(ValidationError, match="extra_forbidden"):
         EvidenceCitation(page=1, quote="Evidence", unexpected=True)
-
-    with pytest.raises(ValidationError, match="extra_forbidden"):
-        VisualEvidenceItem(
-            page=1,
-            transcription="Text",
-            description="Description",
-            readability="clear",
-            unexpected=True,
-        )
 
 
 def test_validation_rejects_duplicate_assessments(rubric: RubricConfig) -> None:
@@ -199,16 +176,6 @@ def test_validation_rejects_nonzero_score_without_evidence(rubric: RubricConfig)
         validate_grading_response(response, rubric, page_count=1)
 
 
-def test_visual_evidence_response_rejects_invalid_readability() -> None:
-    with pytest.raises(ValidationError, match="readability"):
-        VisualEvidenceItem(
-            page=1,
-            transcription="Text",
-            description="Description",
-            readability="unknown",
-        )
-
-
 def test_grading_schema_constrains_item_and_criterion_ids(
     rubric: RubricConfig,
 ) -> None:
@@ -243,17 +210,10 @@ def test_render_rubric_prompt_includes_rubric_criteria(
     assert "6 = Complete" in rendered
 
 
-def test_prompt_files_contain_versioned_untrusted_content_rules() -> None:
-    visual_prompt = (PROMPT_ROOT / "visual_evidence.md").read_text(encoding="utf-8")
+def test_prompt_file_contains_versioned_untrusted_content_rules() -> None:
     grading_prompt = (PROMPT_ROOT / "grading.md").read_text(encoding="utf-8")
 
-    assert "prompt_version: 1" in visual_prompt
-    assert "Do not grade" in visual_prompt
-    assert "untrusted" in visual_prompt
-    assert "unreadable" in visual_prompt
-    assert "diagram" in visual_prompt
-
-    assert "prompt_version: 2" in grading_prompt
+    assert "prompt_version: 3" in grading_prompt
     assert "untrusted" in grading_prompt
     assert "ignore" in grading_prompt.lower()
     assert "Bahasa Indonesia" in grading_prompt
@@ -303,8 +263,6 @@ def _weighted_rubric() -> RubricConfig:
 
 def _weighted_response(
     scores: tuple[int, int, int],
-    *,
-    readability: tuple[str, str, str] = ("clear", "clear", "clear"),
 ) -> GradingResponse:
     return GradingResponse(
         assessments=[
@@ -318,7 +276,6 @@ def _weighted_response(
                     if score == 0
                     else [EvidenceCitation(page=index, quote="Supporting answer")]
                 ),
-                readability=readability[index - 1],
             )
             for index, score in enumerate(scores, start=1)
         ],
@@ -356,18 +313,6 @@ def test_calculate_grade_uses_overall_feedback_below_threshold() -> None:
 
     assert grade.total_score == 63
     assert grade.feedback == "Overall feedback."
-
-
-def test_calculate_grade_flags_unreadable_required_evidence() -> None:
-    grade = calculate_grade(
-        _weighted_response(
-            (0, 29, 34),
-            readability=("unreadable", "clear", "clear"),
-        ),
-        _weighted_rubric(),
-    )
-
-    assert "unreadable_evidence:question_1/criterion_1" in grade.review_reasons
 
 
 def test_calculate_grade_rejects_missing_item_feedback() -> None:

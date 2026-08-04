@@ -8,8 +8,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-RESULT_SCHEMA_VERSION = 3
-EXTRACTOR_VERSION = "extractor-1"
+RESULT_SCHEMA_VERSION = 4
+EXTRACTOR_VERSION = "pdf-upload-1"
 ResultStatus = Literal["graded", "needs_review", "error"]
 
 NonEmptyStr = Annotated[str, Field(min_length=1)]
@@ -31,18 +31,17 @@ class ResultFingerprint(_ResultModel):
     normalized_pdf_sha256: NonEmptyStr
     question_sha256: NonEmptyStr
     rubric_sha256: NonEmptyStr
-    visual_prompt_version: NonEmptyStr
     grading_prompt_version: NonEmptyStr
     model_id: NonEmptyStr
     extractor_version: NonEmptyStr
-    result_schema_version: Literal[3]
+    result_schema_version: Literal[4]
     digest: NonEmptyStr
 
     @field_validator("result_schema_version", mode="before")
     @classmethod
     def validate_schema_version(cls, value: object) -> object:
         if type(value) is not int or value != RESULT_SCHEMA_VERSION:
-            raise ValueError("result_schema_version must be integer 3")
+            raise ValueError("result_schema_version must be integer 4")
         return value
 
 
@@ -57,7 +56,7 @@ class ResultGrade(_ResultModel):
 
 
 class ResultRecord(_ResultModel):
-    schema_version: Literal[3] = RESULT_SCHEMA_VERSION
+    schema_version: Literal[4] = RESULT_SCHEMA_VERSION
     status: ResultStatus
     student_id: NonEmptyStr
     student_name: NonEmptyStr
@@ -70,7 +69,7 @@ class ResultRecord(_ResultModel):
     @classmethod
     def validate_schema_version(cls, value: object) -> object:
         if type(value) is not int or value != RESULT_SCHEMA_VERSION:
-            raise ValueError("schema_version must be integer 3")
+            raise ValueError("schema_version must be integer 4")
         return value
 
     @model_validator(mode="after")
@@ -85,14 +84,14 @@ class ResultRecord(_ResultModel):
 
 
 class ResultsDocument(_ResultModel):
-    schema_version: Literal[3] = RESULT_SCHEMA_VERSION
+    schema_version: Literal[4] = RESULT_SCHEMA_VERSION
     results: list[ResultRecord] = Field(default_factory=list)
 
     @field_validator("schema_version", mode="before")
     @classmethod
     def validate_schema_version(cls, value: object) -> object:
         if type(value) is not int or value != RESULT_SCHEMA_VERSION:
-            raise ValueError("schema_version must be integer 3")
+            raise ValueError("schema_version must be integer 4")
         return value
 
 
@@ -102,7 +101,6 @@ def build_fingerprint(
     normalized_pdf_sha256: str,
     question_sha256: str,
     rubric_sha256: str,
-    visual_prompt_version: str,
     grading_prompt_version: str,
     model_id: str,
     extractor_version: str = EXTRACTOR_VERSION,
@@ -112,7 +110,6 @@ def build_fingerprint(
         "normalized_pdf_sha256": normalized_pdf_sha256,
         "question_sha256": question_sha256,
         "rubric_sha256": rubric_sha256,
-        "visual_prompt_version": visual_prompt_version,
         "grading_prompt_version": grading_prompt_version,
         "model_id": model_id,
         "extractor_version": extractor_version,

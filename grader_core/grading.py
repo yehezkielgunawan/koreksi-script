@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,25 +24,12 @@ class EvidenceCitation(_ResponseModel):
     quote: NonEmptyStr
 
 
-class VisualEvidenceItem(_ResponseModel):
-    page: PositiveInt
-    transcription: str = ""
-    description: NonEmptyStr
-    readability: Literal["clear", "partial", "unreadable"]
-
-
-class VisualEvidenceResponse(_ResponseModel):
-    evidence: list[VisualEvidenceItem] = Field(min_length=1)
-    review_reasons: list[NonEmptyStr] = Field(default_factory=list)
-
-
 class CriterionAssessment(_ResponseModel):
     item_id: NonEmptyStr
     criterion_id: NonEmptyStr
     selected_score: NonNegativeInt
     rationale: NonEmptyStr
     evidence: list[EvidenceCitation] = Field(default_factory=list)
-    readability: Literal["clear", "partial", "unreadable"]
 
 
 class GradingResponse(_ResponseModel):
@@ -50,12 +37,6 @@ class GradingResponse(_ResponseModel):
     item_feedback: dict[NonEmptyStr, NonEmptyStr]
     overall_feedback: NonEmptyStr
     review_reasons: list[NonEmptyStr] = Field(default_factory=list)
-
-
-class EvidencePackage(_ResponseModel):
-    question_text: str = ""
-    answer_text: str = ""
-    visual_evidence: list[VisualEvidenceItem] = Field(default_factory=list)
 
 
 class GradingValidationError(ValueError):
@@ -75,18 +56,6 @@ class CalculatedGrade:
     weakest_item_id: str
     feedback: str
     review_reasons: tuple[str, ...]
-
-
-def validate_visual_evidence(
-    response: VisualEvidenceResponse, page_count: int
-) -> None:
-    errors = [
-        f"evidence references page {item.page}, but document has {page_count} pages"
-        for item in response.evidence
-        if item.page > page_count
-    ]
-    if errors:
-        raise GradingValidationError("; ".join(errors))
 
 
 def validate_grading_response(
@@ -184,13 +153,6 @@ def calculate_grade(
         feedback = response.overall_feedback
 
     review_reasons = list(response.review_reasons)
-    for item in rubric.items:
-        for criterion in item.criteria:
-            assessment = assessments[(item.id, criterion.id)]
-            if assessment.readability == "unreadable":
-                reason = f"unreadable_evidence:{item.id}/{criterion.id}"
-                if reason not in review_reasons:
-                    review_reasons.append(reason)
 
     return CalculatedGrade(
         criterion_scores=criterion_scores,
@@ -201,10 +163,6 @@ def calculate_grade(
         feedback=feedback,
         review_reasons=tuple(review_reasons),
     )
-
-
-def visual_evidence_schema() -> dict:
-    return VisualEvidenceResponse.model_json_schema()
 
 
 def grading_response_schema(rubric: RubricConfig | None = None) -> dict:
