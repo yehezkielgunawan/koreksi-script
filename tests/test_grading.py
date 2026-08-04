@@ -18,6 +18,8 @@ from grader_core.grading import (
     VisualEvidenceItem,
     VisualEvidenceResponse,
     calculate_grade,
+    grading_response_schema,
+    render_rubric_prompt,
     validate_grading_response,
 )
 
@@ -207,6 +209,40 @@ def test_visual_evidence_response_rejects_invalid_readability() -> None:
         )
 
 
+def test_grading_schema_constrains_item_and_criterion_ids(
+    rubric: RubricConfig,
+) -> None:
+    schema = grading_response_schema(rubric)
+    properties = schema["$defs"]["CriterionAssessment"]["properties"]
+
+    assert properties["item_id"]["enum"] == ["question_1"]
+    assert properties["criterion_id"]["enum"] == ["criterion_a", "criterion_b"]
+
+
+def test_grading_schema_constrains_scores_to_declared_levels(
+    rubric: RubricConfig,
+) -> None:
+    schema = grading_response_schema(rubric)
+    properties = schema["$defs"]["CriterionAssessment"]["properties"]
+
+    assert properties["selected_score"]["enum"] == [0, 3, 4, 6]
+
+
+def test_render_rubric_prompt_includes_rubric_criteria(
+    rubric: RubricConfig,
+) -> None:
+    rendered = render_rubric_prompt(rubric)
+
+    assert "Test assignment" in rendered
+    assert "question_1" in rendered
+    assert "Question 1" in rendered
+    assert "criterion_a" in rendered
+    assert "Explains the answer" in rendered
+    assert "A clear explanation" in rendered
+    assert "0 = Missing" in rendered
+    assert "6 = Complete" in rendered
+
+
 def test_prompt_files_contain_versioned_untrusted_content_rules() -> None:
     visual_prompt = (PROMPT_ROOT / "visual_evidence.md").read_text(encoding="utf-8")
     grading_prompt = (PROMPT_ROOT / "grading.md").read_text(encoding="utf-8")
@@ -217,7 +253,7 @@ def test_prompt_files_contain_versioned_untrusted_content_rules() -> None:
     assert "unreadable" in visual_prompt
     assert "diagram" in visual_prompt
 
-    assert "prompt_version: 1" in grading_prompt
+    assert "prompt_version: 2" in grading_prompt
     assert "untrusted" in grading_prompt
     assert "ignore" in grading_prompt.lower()
     assert "Bahasa Indonesia" in grading_prompt

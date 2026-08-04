@@ -10,13 +10,16 @@ PROJECT_ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import grader_core.openrouter as openrouter
+from grader_core.config import RubricConfig
 from grader_core.documents import RenderedPage
 from grader_core.grading import (
     EvidencePackage,
+    GradingValidationError,
     grading_response_schema,
 )
 from grader_core.openrouter import (
     DEFAULT_MODEL,
+    InvalidModelResponseError,
     OpenRouterClient,
 )
 
@@ -173,16 +176,143 @@ def test_grade_request_sends_serialized_evidence_and_returns_response() -> None:
         question_text="Explain COBIT.",
         answer_text="The answer.",
     )
+    schema = grading_response_schema(
+        RubricConfig.model_validate(
+            {
+                "schema_version": 1,
+                "assignment": {
+                    "id": "test-assignment",
+                    "title": "Test assignment",
+                    "total_points": 10,
+                    "feedback_language": "id",
+                    "overall_feedback_below": 8,
+                },
+                "items": [
+                    {
+                        "id": "question_1",
+                        "label": "Question 1",
+                        "max_points": 10,
+                        "criteria": [
+                            {
+                                "id": "criterion_a",
+                                "description": "Explains the answer",
+                                "max_points": 10,
+                                "required_evidence": "A clear explanation",
+                                "levels": [
+                                    {"score": 0, "description": "Missing"},
+                                    {"score": 10, "description": "Complete"},
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
 
-    result = client.request_grade("Grading prompt", package, grading_response_schema())
+    result = client.request_grade("Grading prompt", package, schema)
 
     assert result.overall_feedback == "Belum ada data."
     call = completions.calls[0]
     assert call["response_format"]["json_schema"]["name"] == "grading_response"
-    assert call["response_format"]["json_schema"]["schema"] == grading_response_schema()
+    assert call["response_format"]["json_schema"]["schema"] == schema
     user_text = call["messages"][1]["content"]
     assert "Explain COBIT." in user_text
     assert "The answer." in user_text
+
+
+def _grading_payload(criterion_id: str) -> dict[str, object]:
+    return {
+        "assessments": [
+            {
+                "item_id": "question_1",
+                "criterion_id": criterion_id,
+                "selected_score": 0,
+                "rationale": "Tidak ada bukti yang cukup.",
+                "evidence": [],
+                "readability": "clear",
+            }
+        ],
+        "item_feedback": {"question_1": "Perlu ditinjau."},
+        "overall_feedback": "Belum ada data.",
+        "review_reasons": [],
+    }
+
+
+def test_grading_validation_failure_gets_correction_with_error_feedback() -> None:
+    def validator(response: object) -> None:
+        if response.assessments[0].criterion_id != "criterion_a":
+            raise GradingValidationError(
+                "unknown assessment for question_1/criterion_x"
+            )
+
+    fake_client, completions = _fake_openai(
+        [
+            _response(json.dumps(_grading_payload("criterion_x"))),
+            _response(json.dumps(_grading_payload("criterion_a"))),
+        ]
+    )
+    client = OpenRouterClient(client=fake_client, max_attempts=1)
+    package = EvidencePackage(question_text="Explain COBIT.", answer_text="The answer.")
+
+    result = client.request_grade(
+        "Grading prompt", package, validator=validator
+    )
+
+    assert result.assessments[0].criterion_id == "criterion_a"
+    assert len(completions.calls) == 2
+    correction = completions.calls[1]["messages"][-1]["content"]
+    assert "unknown assessment for question_1/criterion_x" in correction
+
+
+def test_grading_validation_failure_twice_raises_invalid_response() -> None:
+    def validator(_response: object) -> None:
+        raise GradingValidationError("missing assessment for question_1/criterion_a")
+
+    fake_client, completions = _fake_openai(
+        [
+            _response(json.dumps(_grading_payload("criterion_a"))),
+            _response(json.dumps(_grading_payload("criterion_a"))),
+        ]
+    )
+    client = OpenRouterClient(client=fake_client, max_attempts=1)
+    package = EvidencePackage(question_text="Explain COBIT.", answer_text="The answer.")
+
+    with pytest.raises(
+        InvalidModelResponseError, match="remained invalid after one correction request"
+    ):
+        client.request_grade("Grading prompt", package, validator=validator)
+
+    assert len(completions.calls) == 2
+
+
+def test_correction_message_includes_parse_error_details() -> None:
+    fake_client, completions = _fake_openai(
+        [
+            _response("not json"),
+            _response(
+                json.dumps(
+                    {
+                        "evidence": [
+                            {
+                                "page": 1,
+                                "transcription": "Corrected",
+                                "description": "Corrected description",
+                                "readability": "clear",
+                            }
+                        ]
+                    }
+                )
+            ),
+        ]
+    )
+    client = OpenRouterClient(client=fake_client, max_attempts=1)
+
+    result = client.extract_visual_evidence("Prompt", ())
+
+    assert result.evidence[0].transcription == "Corrected"
+    correction = completions.calls[1]["messages"][-1]["content"]
+    assert "Expecting value" in correction
 
 
 def test_transient_rate_limit_is_retried_with_backoff() -> None:

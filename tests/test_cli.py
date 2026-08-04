@@ -208,6 +208,7 @@ def test_grade_writes_a_versioned_result_without_network_access(
     )
     output_path = tmp_path / "results_v3.json"
     client_kwargs: dict[str, object] = {}
+    grade_prompts: list[str] = []
 
     class FakeClient:
         def __init__(self, **kwargs: object) -> None:
@@ -228,8 +229,9 @@ def test_grade_writes_a_versioned_result_without_network_access(
             )
 
         def request_grade(
-            self, _prompt: str, _evidence: object
+            self, prompt: str, _evidence: object, **_kwargs: object
         ) -> GradingResponse:
+            grade_prompts.append(prompt)
             return GradingResponse(
                 assessments=[
                     CriterionAssessment(
@@ -264,6 +266,8 @@ def test_grade_writes_a_versioned_result_without_network_access(
 
     assert exit_code == 0
     assert client_kwargs["request_timeout_seconds"] == 90
+    assert "Explains the answer." in grade_prompts[0]
+    assert "question_1_criterion" in grade_prompts[0]
     document = ResultsDocument.model_validate_json(output_path.read_text())
     assert document.results[0].status == "graded"
     assert document.results[0].grade is not None
@@ -356,7 +360,7 @@ def test_grade_persists_timeout_error_and_continues_to_next_submission(
             )
 
         def request_grade(
-            self, _prompt: str, _evidence: object
+            self, _prompt: str, _evidence: object, **_kwargs: object
         ) -> GradingResponse:
             nonlocal grade_calls
             grade_calls += 1
