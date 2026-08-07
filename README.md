@@ -21,7 +21,7 @@ Create a local `.env` file, which is ignored by Git:
 OPENROUTER_API_KEY=your_openrouter_api_key
 ```
 
-The default model is `google/gemma-4-26b-a4b-it:free`. Pass `--model` to select another OpenRouter model. Free endpoints can be rate-limited and have provider privacy tradeoffs; the CLI prints a warning when one is selected.
+The default model is `google/gemma-4-31b-it:free`. Pass `--model` to select another OpenRouter model. Free endpoints can be rate-limited and have provider privacy tradeoffs; the CLI prints a warning when one is selected.
 
 ## Input Layout
 

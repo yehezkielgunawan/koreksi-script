@@ -2,6 +2,7 @@ import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -19,8 +20,40 @@ from grader_core.grading import (
 )
 
 
+def format_openrouter_error(error: Exception) -> str:
+    """Return an API error without serializing response bodies or file content."""
+    status_code = _status_code(error)
+    if status_code is None:
+        return str(error) or type(error).__name__
+
+    body = getattr(error, "body", None)
+    error_body = body.get("error", {}) if isinstance(body, dict) else {}
+    if not isinstance(error_body, dict):
+        error_body = {}
+    metadata = error_body.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    fields = [f"status={status_code}"]
+    provider = metadata.get("provider_name")
+    if isinstance(provider, str) and provider.strip():
+        fields.append(f"provider={provider.strip()}")
+    provider_error_code = metadata.get("provider_error_code")
+    if isinstance(provider_error_code, str) and provider_error_code.strip():
+        fields.append(f"code={provider_error_code.strip()}")
+
+    retry_after = _retry_after_seconds(error)
+    if retry_after is not None:
+        fields.append(f"retry_after={retry_after:g}s")
+
+    message = _safe_error_message(error_body.get("message"))
+    if message:
+        fields.append(f"message={message}")
+    return "OpenRouter request failed (" + ", ".join(fields) + ")"
+
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
+DEFAULT_MODEL = "google/gemma-4-31b-it:free"
 DEFAULT_MAX_ATTEMPTS = 2
 DEFAULT_RETRY_BASE_SECONDS = 2.0
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 180.0
@@ -192,10 +225,12 @@ class OpenRouterClient:
             except Exception as exc:
                 if not _is_retryable(exc) or attempt == self.max_attempts - 1:
                     raise
-                delay = self.retry_base_seconds * (2**attempt)
+                delay = _retry_after_seconds(exc)
+                if delay is None:
+                    delay = self.retry_base_seconds * (2**attempt)
                 print(
                     f"OpenRouter request failed on attempt {attempt + 1}/"
-                    f"{self.max_attempts} ({type(exc).__name__}: {exc}); "
+                    f"{self.max_attempts} ({format_openrouter_error(exc)}); "
                     f"retrying in {delay:.1f}s.",
                     file=sys.stderr,
                     flush=True,
@@ -265,11 +300,63 @@ def _usage_int(usage: Any, field: str) -> int | None:
 
 
 def _is_retryable(error: Exception) -> bool:
-    status_code = getattr(error, "status_code", None)
-    if status_code is None:
-        response = getattr(error, "response", None)
-        status_code = getattr(response, "status_code", None)
+    status_code = _status_code(error)
     if status_code == 429 or isinstance(status_code, int) and 500 <= status_code < 600:
         return True
     message = str(error).casefold()
     return any(term in message for term in ("rate limit", "timed out", "timeout", "temporarily unavailable"))
+
+
+def _status_code(error: Exception) -> int | None:
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        response = getattr(error, "response", None)
+        status_code = getattr(response, "status_code", None)
+    return status_code if isinstance(status_code, int) else None
+
+
+def _retry_after_seconds(error: Exception) -> float | None:
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        value = next(
+            (
+                header_value
+                for header_name, header_value in headers.items()
+                if str(header_name).casefold() == "retry-after"
+            ),
+            None,
+        )
+        parsed = _non_negative_float(value)
+        if parsed is not None:
+            return parsed
+
+    body = getattr(error, "body", None)
+    if not isinstance(body, dict):
+        return None
+    error_body = body.get("error", {})
+    if not isinstance(error_body, dict):
+        return None
+    metadata = error_body.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return None
+    return _non_negative_float(metadata.get("retry_after_seconds"))
+
+
+def _non_negative_float(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) and parsed >= 0 else None
+
+
+def _safe_error_message(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    message = " ".join(value.split())
+    if not message or len(message) > 200:
+        return None
+    if any(marker in message.casefold() for marker in ("file_annotations", "<file")):
+        return None
+    return message

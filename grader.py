@@ -39,7 +39,11 @@ from grader_core import (
 from grader_core.config import RubricCatalog, RubricConfig, RubricLoadError
 from grader_core.documents import NormalizedDocument
 from grader_core.grading import grading_response_schema, render_rubric_prompt
-from grader_core.openrouter import DEFAULT_REQUEST_TIMEOUT_SECONDS, OpenRouterClient
+from grader_core.openrouter import (
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    OpenRouterClient,
+    format_openrouter_error,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -623,7 +627,7 @@ def _print_progress(
 
 
 def _error_text(error: Exception) -> str:
-    return str(error) or type(error).__name__
+    return format_openrouter_error(error)
 
 
 if __name__ == "__main__":

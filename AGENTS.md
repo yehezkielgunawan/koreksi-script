@@ -36,7 +36,7 @@ Dry runs perform discovery, assignment-selector and catalog validation, document
 - `.env` requires `OPENROUTER_API_KEY` for `grade` and `regrade`.
 - `.env` is ignored and must never be committed.
 - LibreOffice is required when grading DOC or DOCX files.
-- The default model is `google/gemma-4-26b-a4b-it:free`; the CLI accepts `--model`.
+- The default model is `google/gemma-4-31b-it:free`; the CLI accepts `--model`.
 
 ## Key Behavior
 
