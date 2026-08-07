@@ -54,9 +54,20 @@ class FakeCompletions:
 
 
 class FakeAPIError(Exception):
-    def __init__(self, status_code: int) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        headers: dict[str, str] | None = None,
+        body: object | None = None,
+    ) -> None:
         super().__init__(f"HTTP {status_code}")
         self.status_code = status_code
+        self.response = SimpleNamespace(
+            status_code=status_code,
+            headers=headers or {},
+        )
+        self.body = body
 
 
 def _fake_openai(outcomes: list[object]) -> tuple[SimpleNamespace, FakeCompletions]:
@@ -289,6 +300,29 @@ def test_transient_rate_limit_is_retried_with_backoff(tmp_path: Path) -> None:
     assert result.assessments[0].criterion_id == "criterion_a"
     assert len(completions.calls) == 2
     assert sleeps == [0.25]
+
+
+def test_retryable_error_uses_provider_retry_after_header(tmp_path: Path) -> None:
+    pdf_path = _write_pdf(tmp_path)
+    fake_client, completions = _fake_openai(
+        [
+            FakeAPIError(429, headers={"Retry-After": "30"}),
+            _response(json.dumps(_grading_payload())),
+        ]
+    )
+    sleeps: list[float] = []
+    client = OpenRouterClient(
+        client=fake_client,
+        max_attempts=2,
+        retry_base_seconds=0.25,
+        sleep=sleeps.append,
+    )
+
+    result = client.request_grade("Grading prompt", "Explain COBIT.", pdf_path)
+
+    assert result.assessments[0].criterion_id == "criterion_a"
+    assert len(completions.calls) == 2
+    assert sleeps == [30.0]
 
 
 def test_timeout_is_retried_once_with_application_retry(

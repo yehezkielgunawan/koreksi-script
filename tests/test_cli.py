@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -373,6 +374,87 @@ def test_grade_persists_timeout_error_and_continues_to_next_submission(
     output = capsys.readouterr().out
     assert "[1/2] FIRST STUDENT: requesting final grade" in output
     assert "[2/2] SECOND STUDENT: requesting final grade" in output
+
+
+def test_grade_sanitizes_provider_error_before_persisting(
+    tmp_path: Path,
+    synthetic_pdf_files: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rubric_path = _write_catalog(tmp_path)
+    assignment_root = tmp_path / "StudentAnswer_PROVIDER_ERROR"
+    student_folder = assignment_root / "123_TEST STUDENT"
+    student_folder.mkdir(parents=True)
+    shutil.copyfile(synthetic_pdf_files["text"], student_folder / "answer.pdf")
+    (student_folder / "Question.html").write_text(
+        "<p>Explain the answer.</p>", encoding="utf-8"
+    )
+    _write_selector(assignment_root)
+    output_path = tmp_path / "results_v4.json"
+
+    class FakeProviderError(Exception):
+        status_code = 429
+        response = SimpleNamespace(
+            status_code=429,
+            headers={"Retry-After": "30"},
+        )
+        body = {
+            "error": {
+                "message": "Provider returned error",
+                "code": 429,
+                "metadata": {
+                    "provider_name": "Darkbloom",
+                    "provider_error_code": "rate_limit_exceeded",
+                    "retry_after_seconds": 30,
+                    "file_annotations": [
+                        {"type": "text", "text": "STUDENT PRIVATE CONTENT"}
+                    ],
+                },
+            }
+        }
+
+        def __str__(self) -> str:
+            return (
+                "Error code: 429 - {full provider body containing "
+                "STUDENT PRIVATE CONTENT and file_annotations}"
+            )
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def request_grade(
+            self, _prompt: str, _question_text: str, _pdf_path: object, **_kwargs: object
+        ) -> GradingResponse:
+            raise FakeProviderError()
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("grader.OpenRouterClient", FakeClient)
+
+    exit_code = main(
+        [
+            "grade",
+            "--rubric",
+            str(rubric_path),
+            "--input",
+            str(assignment_root),
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    record = ResultsDocument.model_validate_json(output_path.read_text()).results[0]
+    assert record.status == "error"
+    assert record.error is not None
+    assert "429" in record.error
+    assert "Darkbloom" in record.error
+    assert "rate_limit_exceeded" in record.error
+    assert "30" in record.error
+    assert "Provider returned error" in record.error
+    assert "STUDENT PRIVATE CONTENT" not in record.error
+    assert "file_annotations" not in record.error
+    assert "full provider body" not in record.error
 
 
 def test_grade_dry_run_uses_dynamic_catalog_questions(
